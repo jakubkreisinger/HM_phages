@@ -23,7 +23,7 @@ Scripts decribing preparation of phyloseq object based on SAMtools outputs.<br /
 <strong>phatyp_prediction.csv</strong> Life cycle predictions<br />
 <strong>phatyp_prediction_KimBae.csv</strong> Life cycle predictions for data from KimBae <br />
 <strong>PHYLOSEQ.prop.BP_100322.R</strong> Phage dataa<br />
-<strong>PHYLOSEQ_merged.gm_NewMeta.Rv/strong> Bacterial data<br />
+<strong>PHYLOSEQ_merged.gm_NewMeta.Rv</strong> Bacterial data<br />
 <strong>PHYLOSEQ.prop.BP.KimBae.R</strong> Phyloseq data for data from KimBae<br />
 <strong>separate_reads_rijen21_k31_probWJ_trsh2_distance.txt</strong> probWJ distance matrix<br />
 <strong>separate_scaffolds_rijen21_k31_Jexact_distance.txt</strong> Jexact distance matrix<br />
