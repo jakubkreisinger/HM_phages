@@ -15,7 +15,7 @@ Scripts decribing preparation of phyloseq object based on SAMtools outputs.<br /
 <strong>07.SPLS.Rmd</strong> Correlation between the composition of phage and bacterial communities tested with SPLS analyses.<br />
 <br />
 <br />
-## Content of https://github.com/jakubkreisinger/HM_phages/tree/Data folder:
+<h2>Content of https://github.com/jakubkreisinger/HM_phages/tree/Data folder:</h2>
 <br />
 <br />
 <strong>diamond_blastn_taxonomy_all</strong> Phage taxonomy<br />
