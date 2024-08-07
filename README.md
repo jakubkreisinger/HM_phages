@@ -5,7 +5,8 @@ This archive contains scripts related to gut phageome and bacterial analyses of 
 ## Content of https://github.com/jakubkreisinger/HM_phages/tree/Scripts folder:
 <br />
 <br />
-__01.phyloseq_phages.Rmd__ Scripts decribing preparation of phyloseq object based on SAMtools outputs.<br />
+__01.phyloseq_phages.Rmd__ 
+Scripts decribing preparation of phyloseq object based on SAMtools outputs.<br />
 **02.Stat_phages.Rmd** Main statistical analyses for phage data, including alpha and beta diversity analyses, analyses of temporal stability and the effects of the trasplantation experiment on differences between donors and recipients (or controls) at the community level.<br /> 
 **03.Life.cycle_phages.Rmd** Analyses for predicted life cycle.<br />
 **04.Sub_contig_anl.Rmd** Analyses testing the effect of phage treatment on subcontig phage community divergence assessed using FST statistics.<br />
