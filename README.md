@@ -15,4 +15,16 @@ Scripts decribing preparation of phyloseq object based on SAMtools outputs.<br /
 <strong>07.SPLS.Rmd</strong> Correlation between the composition of phage and bacterial communities tested with SPLS analyses.<br />
 <br />
 <br />
+## Content of https://github.com/jakubkreisinger/HM_phages/tree/Data folder:
+<br />
+<br />
+<strong>diamond_blastn_taxonomy_all</strong> Phage taxonomy<br />
+<strong>Host_prediction_to_genus_m75_unique_clean.txt</strong> Bacterial host predictions<br />
+<strong>phatyp_prediction.csv</strong> Life cycle predictions<br />
+<strong>phatyp_prediction_KimBae.csv</strong> Life cycle predictions for data from KimBae <br />
+<strong>PHYLOSEQ.prop.BP_100322.R</strong> Phage dataa<br />
+<strong>PHYLOSEQ_merged.gm_NewMeta.Rv/strong> Bacterial data<br />
+<strong>PHYLOSEQ.prop.BP.KimBae.R</strong> Phyloseq data for data from KimBae<br />
+<strong>separate_reads_rijen21_k31_probWJ_trsh2_distance.txt</strong> probWJ distance matrix<br />
+<strong>separate_scaffolds_rijen21_k31_Jexact_distance.txt</strong> Jexact distance matrix<br />
 
