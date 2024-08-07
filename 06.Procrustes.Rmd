@@ -1,0 +1,445 @@
+---
+title: "GM x BP (Procrustes analyses)"
+author: "Jakub Kreisinger"
+date: "September 16, 2021"
+output: html_document
+---
+
+In these scripts, the correlation in the composition of phageomes and bacteriomes is tested using Procrustes analyses.
+
+# Packages and functions
+
+```{r warning=F, message=F}
+library(phyloseq)
+library(mixOmics)
+library(vegan)
+library(LDM)
+library(ccrepe)
+library(plyr)
+library(ape)
+
+c25 <- c("dodgerblue2","#E31A1C", # red
+         "green4",
+         "#6A3D9A", # purple
+         "#FF7F00", # orange
+         "black","gold1",
+         "skyblue2","#FB9A99", # lt pink
+         "palegreen2",
+         "#CAB2D6", # lt purple
+         "#FDBF6F", # lt orange
+          "khaki2",
+         "maroon","orchid1","deeppink1","blue1","steelblue4",
+         "darkturquoise","green1","yellow4","yellow3",
+         "darkorange4","brown","gray70")
+
+```
+
+# Load data
+
+
+```{r}
+
+#load GM data
+load("/media/kreising/DATA/data/BF_mysi/data/PHYLOSEQ_merged.gm_NewMeta.R")
+PHYLOSEQ_merged.gm<-PHYLOSEQ_merged.gm_NewMeta
+
+#load BP data
+load("/media/kreising/DATA/data/BF_mysi/data/PHYLOSEQ.prop.BP_100322.R")
+load("/media/kreising/DATA/data/BF_mysi/data/PHYLOSEQ.01.BP_100322.R")
+
+
+#sample_data(PHYLOSEQ.prop.BP.sub)$seq_sample_ID==sample_names(PHYLOSEQ_merged.gm.sub)
+sample_names(PHYLOSEQ.prop.BP)<-sample_data(PHYLOSEQ.prop.BP)$seq_correct_label
+sample_names(PHYLOSEQ.01.BP)<-sample_data(PHYLOSEQ.01.BP)$seq_correct_label
+
+#dalete non-overlapping samples 
+FILTER<-sample_names(PHYLOSEQ.prop.BP)%in%sample_names(PHYLOSEQ_merged.gm)
+PHYLOSEQ.prop.BP<-prune_samples(FILTER,PHYLOSEQ.prop.BP)
+PHYLOSEQ.01.BP<-prune_samples(FILTER,PHYLOSEQ.01.BP)
+
+PHYLOSEQ.prop.BP.sub<-PHYLOSEQ.prop.BP
+PHYLOSEQ_merged.gm.sub<-PHYLOSEQ_merged.gm
+
+
+```
+
+**Abundances transformed to proportions + rarefaction**
+
+```{r}
+
+#Transform abundance matice to proporions (both GB and BP)
+#
+PHYLOSEQ.prop.BP.sub.trans<-transform_sample_counts(PHYLOSEQ.prop.BP.sub, function(x) x/sum(x))
+PHYLOSEQ_merged.gm.sub.trans<-transform_sample_counts(PHYLOSEQ_merged.gm.sub, function(x) x/sum(x))
+PHYLOSEQ_merged.gm.sub.rare<-rarefy_even_depth(PHYLOSEQ_merged.gm.sub)
+
+```
+
+# Procrustes analyzes (for Bray-Curtis)
+
+Abundance matrices are extracted from the phyloseq data. The samples are arranged so that their order is the same for BP and GB data. Then subsets are created for wild mice and laboratory individuals ad D-1, D2 and D7. Bray-Curtis dissimilarities were calculated for each subset, scaled with PCoA, and a Procrustes analysis was performed. Strain identity was specified for laboratory mice and location for wild mice as a constraint for permutation testing.
+
+
+```{r warning=F, message=F}
+#4 vytazeni dat z phylosequ
+SD.GM<-sample_data(PHYLOSEQ_merged.gm.sub.trans)
+SD.BP<-sample_data(PHYLOSEQ.prop.BP.sub.trans)
+
+SD.GM<-data.frame(SD.GM)
+SD.BP<-data.frame(SD.BP)
+
+OTU.GM<-otu_table(PHYLOSEQ_merged.gm.sub.trans)
+OTU.BP<-t(otu_table(PHYLOSEQ.prop.BP.sub.trans))
+
+class(OTU.BP)<-"matrix"
+class(OTU.GM)<-"matrix"
+
+#5 serazeni vzorku
+OTU.GM<-OTU.GM[ order(rownames(OTU.GM)) , ]
+OTU.BP<-OTU.BP[ order(rownames(OTU.BP)) , ]
+SD.GM<-SD.GM[ order(rownames(SD.GM)), ]
+SD.BP<-SD.BP[ order(rownames(SD.BP)), ]
+
+#subsety
+OTU.GM.w<-OTU.GM[ SD.BP$experimental_group=="donor" , ]
+OTU.BP.w<-OTU.BP[ SD.BP$experimental_group=="donor" , ]
+SD.GM.w<-SD.GM[ SD.BP$experimental_group=="donor", ]
+SD.BP.w<-SD.BP[ SD.BP$experimental_group=="donor", ]
+
+OTU.GM.0<-OTU.GM[ SD.BP$day_of_experiment=="D-1" , ]
+OTU.BP.0<-OTU.BP[ SD.BP$day_of_experiment=="D-1" , ]
+SD.GM.0<-SD.GM[ SD.BP$day_of_experiment=="D-1", ]
+SD.BP.0<-SD.BP[ SD.BP$day_of_experiment=="D-1", ]
+
+OTU.GM.2<-OTU.GM[ SD.BP$day_of_experiment=="D2" , ]
+OTU.BP.2<-OTU.BP[ SD.BP$day_of_experiment=="D2" , ]
+SD.GM.2<-SD.GM[ SD.BP$day_of_experiment=="D2", ]
+SD.BP.2<-SD.BP[ SD.BP$day_of_experiment=="D2", ]
+
+OTU.GM.7<-OTU.GM[ SD.BP$day_of_experiment=="D7" , ]
+OTU.BP.7<-OTU.BP[ SD.BP$day_of_experiment=="D7" , ]
+SD.GM.7<-SD.GM[ SD.BP$day_of_experiment=="D7", ]
+SD.BP.7<-SD.BP[ SD.BP$day_of_experiment=="D7", ]
+
+
+#SPOCITAT DISTANCE###############
+OTU.GM.w.bc<-vegdist(OTU.GM.w^0.5)
+OTU.BP.w.bc<-vegdist(OTU.BP.w^0.5)
+OTU.GM.0.bc<-vegdist(OTU.GM.0^0.5)
+OTU.BP.0.bc<-vegdist(OTU.BP.0^0.5)
+OTU.GM.2.bc<-vegdist(OTU.GM.2^0.5)
+OTU.BP.2.bc<-vegdist(OTU.BP.2^0.5)
+OTU.GM.7.bc<-vegdist(OTU.GM.7^0.5)
+OTU.BP.7.bc<-vegdist(OTU.BP.7^0.5)
+
+
+#Pcoa
+OTU.GM.w.bc.pc<-pcoa(OTU.GM.w.bc,correction = "cailliez")$vectors
+OTU.BP.w.bc.pc<-pcoa(OTU.BP.w.bc,correction = "cailliez")$vectors
+OTU.GM.0.bc.pc<-pcoa(OTU.GM.0.bc,correction = "cailliez")$vectors
+OTU.BP.0.bc.pc<-pcoa(OTU.BP.0.bc,correction = "cailliez")$vectors
+OTU.GM.2.bc.pc<-pcoa(OTU.GM.2.bc,correction = "cailliez")$vectors
+OTU.BP.2.bc.pc<-pcoa(OTU.BP.2.bc,correction = "cailliez")$vectors
+OTU.GM.7.bc.pc<-pcoa(OTU.GM.7.bc,correction = "cailliez")$vectors
+OTU.BP.7.bc.pc<-pcoa(OTU.BP.7.bc,correction = "cailliez")$vectors
+
+
+#######################
+#BRAY CURTIS PROTEST###
+#######################
+
+#unrestricted permutations
+PROTEST.w<-protest(OTU.BP.w.bc.pc,OTU.GM.w.bc.pc)
+PROTEST.0<-protest(OTU.BP.0.bc.pc,OTU.GM.0.bc.pc)
+PROTEST.2<-protest(OTU.BP.2.bc.pc,OTU.GM.2.bc.pc)
+PROTEST.7<-protest(OTU.BP.7.bc.pc,OTU.GM.7.bc.pc)
+
+#restricted permutations
+BLOCKS<-as.factor(SD.BP.w$strain_locality)
+plots <- Plots(strata =BLOCKS)
+CTRL <- how(plots = plots, within = Within(type = "free"))
+PROTEST.w<-protest(OTU.BP.w.bc.pc,OTU.GM.w.bc.pc,permutations=CTRL)
+
+BLOCKS<-as.factor(SD.BP.0$strain_locality)
+plots <- Plots(strata =BLOCKS)
+CTRL <- how(plots = plots, within = Within(type = "free"))
+PROTEST.0<-protest(OTU.BP.0.bc.pc,OTU.GM.0.bc.pc,permutations=CTRL)
+
+BLOCKS<-as.factor(SD.BP.2$strain_locality)
+plots <- Plots(strata =BLOCKS)
+CTRL <- how(plots = plots, within = Within(type = "free"))
+PROTEST.2<-protest(OTU.BP.2.bc.pc,OTU.GM.2.bc.pc,permutations=CTRL)
+
+BLOCKS<-as.factor(SD.BP.7$strain_locality)
+plots <- Plots(strata =BLOCKS)
+CTRL <- how(plots = plots, within = Within(type = "free"))
+PROTEST.7<-protest(OTU.BP.7.bc.pc,OTU.GM.7.bc.pc,permutations=CTRL)
+
+
+#Summary table
+PROTEST<-PROTEST.w
+PR.w<-c(PROTEST$ss,PROTEST$t0,PROTEST$signif)
+PROTEST<-PROTEST.0
+PR.0<-c(PROTEST$ss,PROTEST$t0,PROTEST$signif)
+PROTEST<-PROTEST.2
+PR.2<-c(PROTEST$ss,PROTEST$t0,PROTEST$signif)
+PROTEST<-PROTEST.7
+PR.7<-c(PROTEST$ss,PROTEST$t0,PROTEST$signif)
+
+DF.RES<-rbind(PR.w,PR.0,PR.2,PR.7)
+colnames(DF.RES)<-c("ss","r","p")
+DF.RES.bc<-DF.RES
+
+#Plots
+SD.GM.uniq<-SD.GM[duplicated(SD.GM$mouse_ID)==F,]
+SD.GM.uniq<-data.frame(SD.GM.uniq)
+
+PROTEST<-PROTEST.w
+DF<-data.frame(PROTEST$Yrot[,1:2],PROTEST$X[,1:2],
+               mouse_ID=row.names(PROTEST$Yrot),
+               day="wild")
+DF$mouse_ID<-gsub("_m1$","",DF$mouse_ID)               
+DF<-join(DF,SD.GM.uniq)             
+DFw<-DF
+
+PROTEST<-PROTEST.0
+DF<-data.frame(PROTEST$Yrot[,1:2],PROTEST$X[,1:2],
+               mouse_ID=row.names(PROTEST$Yrot),
+               day="-1")
+DF$mouse_ID<-gsub("_m1$","",DF$mouse_ID)               
+DF<-join(DF,SD.GM.uniq)             
+DF1<-DF
+
+PROTEST<-PROTEST.2
+DF<-data.frame(PROTEST$Yrot[,1:2],PROTEST$X[,1:2],
+               mouse_ID=row.names(PROTEST$Yrot),
+               day="2")
+DF$mouse_ID<-gsub("_[0-9]*$","",DF$mouse_ID)                   
+DF<-join(DF,SD.GM.uniq)             
+DF2<-DF
+
+PROTEST<-PROTEST.7
+DF<-data.frame(PROTEST$Yrot[,1:2],PROTEST$X[,1:2],
+               mouse_ID=row.names(PROTEST$Yrot),
+               day="7")
+DF$mouse_ID<-gsub("_[0-9]*$","",DF$mouse_ID)                   
+DF<-join(DF,SD.GM.uniq)             
+DF7<-DF
+
+DF.ALL<-rbind(DFw,DF1,DF2,DF7)
+
+# names(DF.ALL)
+gg<-ggplot(DF.ALL,aes(x=Axis.1,y=Axis.2,color=strain_locality))+
+  geom_point(alpha=0.5)+
+  geom_segment(aes(xend = X1, yend = X2, x = Axis.1, y = Axis.2),alpha=0.5,
+                  arrow = arrow(length = unit(0.1, "cm")))+
+  facet_grid(.~day)
+
+gg.bc<-gg
+
+
+```
+
+# The same for Jaccard dissimilarities
+
+```{r}
+#4 vytazeni dat z phylosequ
+SD.GM<-sample_data(PHYLOSEQ_merged.gm.sub.rare)
+SD.BP<-sample_data(PHYLOSEQ.01.BP)
+
+SD.GM<-data.frame(SD.GM)
+SD.BP<-data.frame(SD.BP)
+
+OTU.GM<-otu_table(PHYLOSEQ_merged.gm.sub.rare)
+OTU.BP<-t(otu_table(PHYLOSEQ.01.BP))
+
+class(OTU.BP)<-"matrix"
+class(OTU.GM)<-"matrix"
+
+#5 serazeni vzorku
+OTU.GM<-OTU.GM[ order(rownames(OTU.GM)) , ]
+OTU.BP<-OTU.BP[ order(rownames(OTU.BP)) , ]
+SD.GM<-SD.GM[ order(rownames(SD.GM)), ]
+SD.BP<-SD.BP[ order(rownames(SD.BP)), ]
+
+#subsety
+OTU.GM.w<-OTU.GM[ SD.BP$experimental_group=="donor" , ]
+OTU.BP.w<-OTU.BP[ SD.BP$experimental_group=="donor" , ]
+SD.GM.w<-SD.GM[ SD.BP$experimental_group=="donor", ]
+SD.BP.w<-SD.BP[ SD.BP$experimental_group=="donor", ]
+
+OTU.GM.0<-OTU.GM[ SD.BP$day_of_experiment=="D-1" , ]
+OTU.BP.0<-OTU.BP[ SD.BP$day_of_experiment=="D-1" , ]
+SD.GM.0<-SD.GM[ SD.BP$day_of_experiment=="D-1", ]
+SD.BP.0<-SD.BP[ SD.BP$day_of_experiment=="D-1", ]
+
+OTU.GM.2<-OTU.GM[ SD.BP$day_of_experiment=="D2" , ]
+OTU.BP.2<-OTU.BP[ SD.BP$day_of_experiment=="D2" , ]
+SD.GM.2<-SD.GM[ SD.BP$day_of_experiment=="D2", ]
+SD.BP.2<-SD.BP[ SD.BP$day_of_experiment=="D2", ]
+
+OTU.GM.7<-OTU.GM[ SD.BP$day_of_experiment=="D7" , ]
+OTU.BP.7<-OTU.BP[ SD.BP$day_of_experiment=="D7" , ]
+SD.GM.7<-SD.GM[ SD.BP$day_of_experiment=="D7", ]
+SD.BP.7<-SD.BP[ SD.BP$day_of_experiment=="D7", ]
+
+
+#SPOCITAT DISTANCE###############
+OTU.GM.w.ja<-vegdist(OTU.GM.w,method = "jaccard",binary=T)
+OTU.BP.w.ja<-vegdist(OTU.BP.w,method = "jaccard",binary=T)
+OTU.GM.0.ja<-vegdist(OTU.GM.0,method = "jaccard",binary=T)
+OTU.BP.0.ja<-vegdist(OTU.BP.0,method = "jaccard",binary=T)
+OTU.GM.2.ja<-vegdist(OTU.GM.2,method = "jaccard",binary=T)
+OTU.BP.2.ja<-vegdist(OTU.BP.2,method = "jaccard",binary=T)
+OTU.GM.7.ja<-vegdist(OTU.GM.7,method = "jaccard",binary=T)
+OTU.BP.7.ja<-vegdist(OTU.BP.7,method = "jaccard",binary=T)
+
+#Pcoa
+OTU.GM.w.ja.pc<-pcoa(OTU.GM.w.ja,correction = "cailliez")$vectors
+OTU.BP.w.ja.pc<-pcoa(OTU.BP.w.ja,correction = "cailliez")$vectors
+OTU.GM.0.ja.pc<-pcoa(OTU.GM.0.ja,correction = "cailliez")$vectors
+OTU.BP.0.ja.pc<-pcoa(OTU.BP.0.ja,correction = "cailliez")$vectors
+OTU.GM.2.ja.pc<-pcoa(OTU.GM.2.ja,correction = "cailliez")$vectors
+OTU.BP.2.ja.pc<-pcoa(OTU.BP.2.ja,correction = "cailliez")$vectors
+OTU.GM.7.ja.pc<-pcoa(OTU.GM.7.ja,correction = "cailliez")$vectors
+OTU.BP.7.ja.pc<-pcoa(OTU.BP.7.ja,correction = "cailliez")$vectors
+
+
+
+#######################
+#JACCARD PROTEST#######
+#######################
+
+#unrestricted permutations
+PROTEST.w<-protest(OTU.BP.w.ja.pc,OTU.GM.w.ja.pc)
+PROTEST.0<-protest(OTU.BP.0.ja.pc,OTU.GM.0.ja.pc)
+PROTEST.2<-protest(OTU.BP.2.ja.pc,OTU.GM.2.ja.pc)
+PROTEST.7<-protest(OTU.BP.7.ja.pc,OTU.GM.7.ja.pc)
+
+#restricted permutations
+BLOCKS<-as.factor(SD.BP.w$strain_locality)
+plots <- Plots(strata =BLOCKS)
+CTRL <- how(plots = plots, within = Within(type = "free"))
+PROTEST.w<-protest(OTU.BP.w.ja.pc,OTU.GM.w.ja.pc,permutations=CTRL)
+
+BLOCKS<-as.factor(SD.BP.0$strain_locality)
+plots <- Plots(strata =BLOCKS)
+CTRL <- how(plots = plots, within = Within(type = "free"))
+PROTEST.0<-protest(OTU.BP.0.ja.pc,OTU.GM.0.ja.pc,permutations=CTRL)
+
+BLOCKS<-as.factor(SD.BP.2$strain_locality)
+plots <- Plots(strata =BLOCKS)
+CTRL <- how(plots = plots, within = Within(type = "free"))
+PROTEST.2<-protest(OTU.BP.2.ja.pc,OTU.GM.2.ja.pc,permutations=CTRL)
+
+BLOCKS<-as.factor(SD.BP.7$strain_locality)
+plots <- Plots(strata =BLOCKS)
+CTRL <- how(plots = plots, within = Within(type = "free"))
+PROTEST.7<-protest(OTU.BP.7.ja.pc,OTU.GM.7.ja.pc,permutations=CTRL)
+
+
+#Summary table
+PROTEST<-PROTEST.w
+PR.w<-c(PROTEST$ss,PROTEST$t0,PROTEST$signif)
+PROTEST<-PROTEST.0
+PR.0<-c(PROTEST$ss,PROTEST$t0,PROTEST$signif)
+PROTEST<-PROTEST.2
+PR.2<-c(PROTEST$ss,PROTEST$t0,PROTEST$signif)
+PROTEST<-PROTEST.7
+PR.7<-c(PROTEST$ss,PROTEST$t0,PROTEST$signif)
+
+DF.RES<-rbind(PR.w,PR.0,PR.2,PR.7)
+colnames(DF.RES)<-c("ss","r","p")
+DF.RES.ja<-DF.RES
+
+#Plots
+SD.GM.uniq<-SD.GM[duplicated(SD.GM$mouse_ID)==F,]
+SD.GM.uniq<-data.frame(SD.GM.uniq)
+
+PROTEST<-PROTEST.w
+DF<-data.frame(PROTEST$Yrot[,1:2],PROTEST$X[,1:2],
+               mouse_ID=row.names(PROTEST$Yrot),
+               day="wild")
+DF$mouse_ID<-gsub("_[0-9]*$","",DF$mouse_ID)               
+DF<-join(DF,SD.GM.uniq)             
+DFw<-DF
+
+PROTEST<-PROTEST.0
+DF<-data.frame(PROTEST$Yrot[,1:2],PROTEST$X[,1:2],
+               mouse_ID=row.names(PROTEST$Yrot),
+               day="-1")
+DF$mouse_ID<-gsub("_m1$","",DF$mouse_ID)               
+DF<-join(DF,SD.GM.uniq)             
+DF1<-DF
+
+PROTEST<-PROTEST.2
+DF<-data.frame(PROTEST$Yrot[,1:2],PROTEST$X[,1:2],
+               mouse_ID=row.names(PROTEST$Yrot),
+               day="2")
+DF$mouse_ID<-gsub("_[0-9]*$","",DF$mouse_ID)                   
+DF<-join(DF,SD.GM.uniq)             
+DF2<-DF
+
+PROTEST<-PROTEST.7
+DF<-data.frame(PROTEST$Yrot[,1:2],PROTEST$X[,1:2],
+               mouse_ID=row.names(PROTEST$Yrot),
+               day="7")
+DF$mouse_ID<-gsub("_[0-9]*$","",DF$mouse_ID)                   
+DF<-join(DF,SD.GM.uniq)             
+DF7<-DF
+
+DF.ALL<-rbind(DFw,DF1,DF2,DF7)
+
+# names(DF.ALL)
+gg<-ggplot(DF.ALL,aes(x=Axis.1,y=Axis.2,color=strain_locality))+
+  geom_point(alpha=0.5)+
+  geom_segment(aes(xend = X1, yend = X2, x = Axis.1, y = Axis.2),alpha=0.5,
+                  arrow = arrow(length = unit(0.1, "cm")))+
+  facet_grid(.~day)
+
+gg.ja<-gg
+
+```
+
+# Final plot and table
+
+Includws results for both Bray-Cujrtis and Jaccard dissimilarities. 
+
+```{r}
+library(ggpubr)
+
+small_fig<-function(gg){
+  gg+theme(axis.text = element_text(size=8),
+           axis.title = element_text(size=8),
+           strip.text = element_text(size=8),
+           plot.title = element_text(size=8),
+           legend.text = element_text(size=8))}
+
+gg.bc.s<-gg.bc
+gg.ja.s<-gg.ja
+
+gg.bc.s<-gg.bc.s+theme_bw()+ggtitle("A) Bray-Curtis")
+gg.ja.s<-gg.ja.s+theme_bw()+ggtitle("B) Jaccard")
+
+gg.bc.s<-gg.bc.s+theme(legend.title = element_blank())
+gg.ja.s<-gg.ja.s+theme(legend.title = element_blank())
+
+GRID<-ggarrange(gg.bc.s,gg.ja.s,common.legend = T,
+                nrow = 2,legend = "bottom")
+
+ggsave(GRID,filename = "/media/kreising/DATA/data/BF_mysi/RESULTS_10.70.2023/BP_GM.pdf",
+       height = 12,width = 18,units = "cm")
+
+GRID
+
+RESULTS<-data.frame(Dissimilarity=c("Bray-Curtis","","","","Jaccard","","",""),
+                    Group=c("wild","Day -1","Day 2","Day 7",
+                            "wild","Day -1","Day 2","Day 7"),
+                    rbind(DF.RES.bc,DF.RES.ja))
+
+
+write.table(RESULTS,file = "/media/kreising/DATA/data/BF_mysi/RESULTS_10.70.2023/Procrustes_GM_BP.txt",
+            quote = F, row.names = F, sep="\t")
+
+RESULTS
+```

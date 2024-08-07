@@ -1,0 +1,2050 @@
+---
+title: "Statistical analyses - phage comunnity"
+author: "Jakub Kreisinger"
+date: "July 22, 2021"
+output: html_document
+---
+
+# Description
+
+
+# R packages and functions
+
+```{r warning=F,message=F}
+knitr::opts_chunk$set(echo = TRUE)
+library(phyloseq)
+library(ggplot2)
+library(ggh4x)
+library(vegan)
+library(lme4)
+library(lmerTest)
+library(multcomp)
+library(ggpubr)
+library(ape)
+library(plyr)
+library(reshape2)
+library(ComplexHeatmap)
+library(mvabund)
+library(dplyr)
+library(reshape2)
+library(simpleboot)
+
+# Color palette
+c25 <- c("dodgerblue2","#E31A1C", # red
+         "green4",
+         "#6A3D9A", # purple
+         "#FF7F00", # orange
+         "black","gold1",
+         "skyblue2","#FB9A99", # lt pink
+         "palegreen2",
+         "#CAB2D6", # lt purple
+         "#FDBF6F", # lt orange
+          "khaki2",
+         "maroon","orchid1","deeppink1","blue1","steelblue4",
+         "darkturquoise","green1","yellow4","yellow3",
+         "darkorange4","brown","gray70")
+
+# This function extracts the abundances for specific taxa from the phyloseq object (i.e. the option "which.taxa") and converts them into a long format (i.e. the abundance for each sample in a single row) and merges them with the metadata of the samples for plotting purposes.
+
+phyloseq_2_GG<-function(which.taxa,which.phyloseq,manage.ussigned=NULL,unassign.string=NULL){  
+  RESULT<-data.frame(stringsAsFactors = F)
+  subset_phylos<-prune_taxa(taxa_names(which.phyloseq)%in%which.taxa,which.phyloseq)
+  SSUMS<-sample_sums(which.phyloseq)
+  for(i in 1: length(which.taxa))
+    {
+      actual.phylos<-prune_taxa(taxa_names(which.phyloseq)%in%which.taxa[i],which.phyloseq)
+      Abundance<-as.numeric(otu_table(actual.phylos))  
+      OTU<-rep(which.taxa[i],length(Abundance))
+      Seq.tot<-rep(SSUMS[i],length(Abundance))
+      Seq.tot<-SSUMS
+      Taxo.actual<-as.character(tax_table(actual.phylos))
+      if(manage.ussigned==T){
+        for(j in 2: length(Taxo.actual)){
+          if(is.na(Taxo.actual[j])){Taxo.actual[j]<-ifelse(regexpr(unassign.string,Taxo.actual[j-1])>0,
+                                           Taxo.actual[j-1],paste(Taxo.actual[j-1],unassign.string,sep=""))}
+        }
+      }
+      
+      Taxo.actual.rbind<-do.call("rbind", replicate(length(sample_sums(actual.phylos)), Taxo.actual, simplify = FALSE))
+      colnames(Taxo.actual.rbind)<-colnames(tax_table(which.phyloseq))
+      Sd<-sample_data(actual.phylos)
+      TEMP<-data.frame(Abundance,OTU,Seq.tot,Taxo.actual.rbind,Sd,stringsAsFactors = F)
+      RESULT<-rbind(RESULT,TEMP)
+    }
+    RESULT
+}
+
+# Plot formatting
+small_fig<-function(gg){
+  gg+theme(axis.text = element_text(size=8),
+           axis.title = element_text(size=8),
+           strip.text = element_text(size=8),
+           plot.title = element_text(size=8),
+           legend.text = element_text(size=8),
+           legend.title = element_blank())
+}
+
+# The function get_arrow_coord.PC() connects longitudinally collected samples from the same individuals by arrows.
+
+get_arrow_coord.PC<-function(Phyloseq,ORD,Subset_var,Subset_level,INDIVIDUAL_var,ORDER){
+
+   COORD<-data.frame(ORD$vectors,sample_data(Phyloseq))
+   COORD<-COORD[COORD[,Subset_var]==Subset_level,]
+
+   INDIV<-levels(as.factor(COORD[,INDIVIDUAL_var]))
+
+   FROM_X<-as.numeric()
+   FROM_Y<-as.numeric()
+   TO_X<-as.numeric()
+   TO_Y<-as.numeric()
+   INDIVIDUAL<-as.character()
+
+   for(i in 1:length(INDIV)){
+      COORD_sub<-COORD[COORD[,INDIVIDUAL_var]==INDIV[i],]
+      COORD_sub<-COORD_sub[order(COORD_sub[,ORDER]),]
+      FROM_X<-c(FROM_X,as.numeric(COORD_sub[1:(dim(COORD_sub)[1]-1),1]))
+      FROM_Y<-c(FROM_Y,as.numeric(COORD_sub[1:(dim(COORD_sub)[1]-1),2]))
+      TO_X<-c(TO_X,as.numeric(COORD_sub[2:(dim(COORD_sub)[1]),1]))
+      TO_Y<-c(TO_Y,as.numeric(COORD_sub[2:(dim(COORD_sub)[1]),2]))
+      INDIVIDUAL<-c(INDIVIDUAL,rep(INDIV[i],(dim(COORD_sub)[1]-1)))
+    }
+
+   ARROW.df<-data.frame(FROM_X,FROM_Y,TO_X,TO_Y,INDIVIDUAL)
+   ARROW.df
+}
+
+
+get_arrow_coord.PC2<-function(Phyloseq,ORD,Subset_var,Subset_level,INDIVIDUAL_var,ORDER,axes=c(1,2)){
+
+   COORD<-data.frame(ORD$vectors,sample_data(Phyloseq))
+   COORD<-COORD[COORD[,Subset_var]==Subset_level,]
+
+   INDIV<-levels(as.factor(COORD[,INDIVIDUAL_var]))
+
+   FROM_X<-as.numeric()
+   FROM_Y<-as.numeric()
+   TO_X<-as.numeric()
+   TO_Y<-as.numeric()
+   INDIVIDUAL<-as.character()
+
+   for(i in 1:length(INDIV)){
+      COORD_sub<-COORD[COORD[,INDIVIDUAL_var]==INDIV[i],]
+      COORD_sub<-COORD_sub[order(COORD_sub[,ORDER]),]
+      FROM_X<-c(FROM_X,as.numeric(COORD_sub[1:(dim(COORD_sub)[1]-1),axes[1]]))
+      FROM_Y<-c(FROM_Y,as.numeric(COORD_sub[1:(dim(COORD_sub)[1]-1),axes[2]]))
+      TO_X<-c(TO_X,as.numeric(COORD_sub[2:(dim(COORD_sub)[1]),axes[1]]))
+      TO_Y<-c(TO_Y,as.numeric(COORD_sub[2:(dim(COORD_sub)[1]),axes[2]]))
+      INDIVIDUAL<-c(INDIVIDUAL,rep(INDIV[i],(dim(COORD_sub)[1]-1)))
+    }
+
+   ARROW.df<-data.frame(FROM_X,FROM_Y,TO_X,TO_Y,INDIVIDUAL)
+   ARROW.df
+}
+
+# ggplot adjustments
+plot_adjust<-function(PLOT){PLOT+theme_bw()+ylab("Dissimilarity")+theme(legend.title = element_blank(),
+                                            axis.title = element_text(size=8),
+                                            axis.text = element_text(size=8),
+                                            strip.text = element_text(size = 8),
+                                            legend.text = element_text(size=8))}
+  
+```
+
+# Phyloseq data
+
+(object from script "preprare_phege_data.Rmd")
+
+```{r fig.height=20,fig.width=15, warning=F, message=F}
+load("/media/kreising/DATA/data/BF_mysi/data/PHYLOSEQ.prop.BP_100322.R")
+load("/media/kreising/DATA/data/BF_mysi/data/PHYLOSEQ.01.BP_100322.R")
+load("/media/kreising/DATA/data/BF_mysi/data/PHYLOSEQ.allF.BP_100322.R")
+
+PHYLOSEQ.prop<-PHYLOSEQ.prop.BP
+PHYLOSEQ.01<-PHYLOSEQ.01.BP
+PHYLOSEQ.allF<-PHYLOSEQ.allF.BP
+```
+
+# Community dissimilarities
+
+Kmer distance were calculated using Dashing2 software. Jaccard and Bray-Curtis distances were calculated based on data included in the phyloseq objects.
+
+```{r fig.height=20,fig.width=15, warning=F, message=F}
+PATH<-"/media/kreising/DATA/data/BF_mysi/phages_proKubu/dashing_distances/"
+
+DIST_list<-list.files("/media/kreising/DATA/data/BF_mysi/phages_proKubu/dashing_distances/")
+DIST_list<-DIST_list[grep("distance",DIST_list)]
+DIST_list
+
+separate_reads_probWJ_distance<-read.delim(paste0(PATH,"separate_reads_rijen21_k31_probWJ_trsh2_distance.txt"))
+separate_scaffolds_Jexact_distance<-read.delim(paste0(PATH,"separate_scaffolds_rijen21_k31_Jexact_distance.txt"))
+
+separate_reads_probWJ_distance<-separate_reads_probWJ_distance[,2:dim(separate_reads_probWJ_distance)[2]]
+separate_scaffolds_Jexact_distance<-separate_scaffolds_Jexact_distance[,2:dim(separate_scaffolds_Jexact_distance)[2]]
+
+colnames(separate_reads_probWJ_distance)<-gsub(".fastq","",colnames(separate_reads_probWJ_distance))
+colnames(separate_scaffolds_Jexact_distance)<-gsub(".fastq","",colnames(separate_scaffolds_Jexact_distance))
+
+rownames(separate_reads_probWJ_distance)<-colnames(separate_reads_probWJ_distance)
+rownames(separate_scaffolds_Jexact_distance)<-colnames(separate_scaffolds_Jexact_distance)
+
+
+#Jaccard and Bray-Curtis distances
+BC<-as.matrix(vegdist(t(otu_table(PHYLOSEQ.prop.BP))))
+JA<-as.matrix(vegdist(data.frame(t(otu_table(PHYLOSEQ.01.BP))),binary = T, method = "jaccard"))
+
+DIST_list<-list(separate_reads_probWJ_distance,separate_scaffolds_Jexact_distance,BC,JA)
+
+names(DIST_list)<-c("separate_reads_probWJ_distance",
+                    "separate_scaffolds_Jexact_distance","BC","JA")
+
+```
+
+# PCoA sample ordination
+
+```{r warning=F,message=F,fig.width=10,fig.height=15}
+
+################
+#BRAY - CURTIS##
+################
+DIST_act<-DIST_list$BC
+DIST_act<-DIST_act[sample_names(PHYLOSEQ.prop),sample_names(PHYLOSEQ.prop)]
+ORD<-ordinate(PHYLOSEQ.prop,as.dist(DIST_act),method = "PCoA")
+ARROW.df<-get_arrow_coord.PC2(Phyloseq=PHYLOSEQ.prop,ORD=ORD,Subset_var="experimental_group"
+                ,Subset_level="recipient",INDIVIDUAL_var="mouse_ID",ORDER="day_of_experiment",axes = c(1,3))
+ARROW.df$experimental_group<-"recipient"
+
+GG<-plot_ordination(PHYLOSEQ.prop,ORD,color="strain_locality",shape="experimental_group",axes = c(1,3))
+GG<-GG+geom_segment(data = ARROW.df,aes(x = FROM_X, y = FROM_Y, xend = TO_X, yend = TO_Y),
+                arrow = arrow(length = unit(0.2, "cm")),alpha=0.4,color="black")
+GG.bc2<-GG
+
+
+###############
+#JACCARD#######
+###############
+
+DIST_act<-DIST_list$JA
+DIST_act<-DIST_act[sample_names(PHYLOSEQ.prop),sample_names(PHYLOSEQ.prop)]
+ORD<-ordinate(PHYLOSEQ.prop,as.dist(DIST_act),method = "PCoA")
+ARROW.df<-get_arrow_coord.PC(Phyloseq=PHYLOSEQ.prop,ORD=ORD,Subset_var="experimental_group"
+                ,Subset_level="recipient",INDIVIDUAL_var="mouse_ID",ORDER="day_of_experiment")
+ARROW.df$experimental_group<-"recipient"
+
+GG<-plot_ordination(PHYLOSEQ.prop,ORD,color="strain_locality",shape="experimental_group")
+GG<-GG+geom_segment(data = ARROW.df,aes(x = FROM_X, y = FROM_Y, xend = TO_X, yend = TO_Y),
+                arrow = arrow(length = unit(0.2, "cm")),alpha=0.4,color="black")
+GG.ja<-GG
+
+
+######################################
+#separate_scaffolds_Jexact_distance###
+######################################
+
+DIST_act<-DIST_list$separate_scaffolds_Jexact_distance
+DIST_act<-DIST_act[sample_names(PHYLOSEQ.prop),sample_names(PHYLOSEQ.prop)]
+ORD<-ordinate(PHYLOSEQ.prop,as.dist(DIST_act),method = "PCoA")
+ARROW.df<-get_arrow_coord.PC(Phyloseq=PHYLOSEQ.prop,ORD=ORD,Subset_var="experimental_group"
+                ,Subset_level="recipient",INDIVIDUAL_var="mouse_ID",ORDER="day_of_experiment")
+ARROW.df$experimental_group<-"recipient"
+
+GG<-plot_ordination(PHYLOSEQ.prop,ORD,color="strain_locality",shape="experimental_group")
+GG<-GG+geom_segment(data = ARROW.df,aes(x = FROM_X, y = FROM_Y, xend = TO_X, yend = TO_Y),
+                arrow = arrow(length = unit(0.2, "cm")),alpha=0.4,color="black")
+GG.separate_scaffolds_Jexact_distance<-GG
+
+##################################
+#separate_reads_probWJ_distance###
+##################################
+
+DIST_act<-DIST_list$separate_reads_probWJ_distance
+DIST_act<-DIST_act[sample_names(PHYLOSEQ.prop),sample_names(PHYLOSEQ.prop)]
+ORD<-ordinate(PHYLOSEQ.prop,as.dist(DIST_act),method = "PCoA")
+ARROW.df<-get_arrow_coord.PC(Phyloseq=PHYLOSEQ.prop,ORD=ORD,Subset_var="experimental_group"
+                ,Subset_level="recipient",INDIVIDUAL_var="mouse_ID",ORDER="day_of_experiment")
+ARROW.df$experimental_group<-"recipient"
+
+GG<-plot_ordination(PHYLOSEQ.prop,ORD,color="strain_locality",shape="experimental_group")
+GG<-GG+geom_segment(data = ARROW.df,aes(x = FROM_X, y = FROM_Y, xend = TO_X, yend = TO_Y),
+                arrow = arrow(length = unit(0.2, "cm")),alpha=0.4,color="black")
+GG.separate_reads_probWJ_distance<-GG
+
+#############Final ajustments###############
+
+GG.bc.s<-small_fig(GG.bc+theme_bw())
+GG.bc2.s<-small_fig(GG.bc2+theme_bw())
+GG.ja.s<-small_fig(GG.ja+theme_bw())
+GG.separate_scaffolds_Jexact_distance.s<-small_fig(GG.separate_scaffolds_Jexact_distance+theme_bw())
+GG.separate_reads_probWJ_distance.s<-small_fig(GG.separate_reads_probWJ_distance+theme_bw())
+
+GG.bc.s<-GG.bc.s+theme(panel.grid = element_line(colour = "white", size = 0.1))
+GG.bc2.s<-GG.bc2.s+theme(panel.grid = element_line(colour = "white", size = 0.1))
+GG.ja.s<-GG.ja.s+theme(panel.grid = element_line(colour = "white", size = 0.1))
+GG.separate_scaffolds_Jexact_distance.s<-GG.separate_scaffolds_Jexact_distance.s+theme(panel.grid = element_line(colour = "white", size = 0.1))
+GG.separate_reads_probWJ_distance.s<-GG.separate_reads_probWJ_distance.s+theme(panel.grid = element_line(colour = "white", size = 0.1))
+
+GG.bc.s<-GG.bc.s+scale_color_discrete(labels=c('BULS','BUSNA','JED','NLC','VPOL'))
+GG.bc2.s<-GG.bc2.s+scale_color_discrete(labels=c('BULS','BUSNA','JED','NLC','VPOL'))
+GG.ja.s<-GG.ja.s+scale_color_discrete(labels=c('BULS','BUSNA','JED','NLC','VPOL'))
+GG.separate_scaffolds_Jexact_distance.s<-GG.separate_scaffolds_Jexact_distance.s+scale_color_discrete(labels=c('BULS','BUSNA','JED','NLC','VPOL'))
+GG.separate_reads_probWJ_distance.s<-GG.separate_reads_probWJ_distance.s+scale_color_discrete(labels=c('BULS','BUSNA','JED','NLC','VPOL'))
+
+GG.bc.s<-GG.bc.s+xlab("Axis 1 (7.5%)")+ylab("Axis 2 (5.9%)")
+GG.bc2.s<-GG.bc2.s+xlab("Axis 1 (7.5%)")+ylab("Axis 3 (5.1%)")
+GG.ja.s<-GG.ja.s+xlab("Axis 1 (8.5%)")+ylab("Axis 2 (6.8%)")
+GG.separate_scaffolds_Jexact_distance.s<-GG.separate_scaffolds_Jexact_distance.s+xlab("Axis 1 (28.0%)")+ylab("Axis 2 (17.9%)")
+GG.separate_reads_probWJ_distance.s<-GG.separate_reads_probWJ_distance.s+xlab("Axis 1 (9.8%)")+ylab("Axis 2 (8.3%)")
+
+#v1 - 4 grafy
+GRID<-ggarrange(GG.bc2.s+ggtitle("A) Bray-Curtis")+theme(plot.title = element_text(size=8,face = "bold")),
+                GG.ja.s+ggtitle("B) Jaccard")+theme(plot.title = element_text(size=8,face = "bold")),
+                GG.separate_reads_probWJ_distance.s+ggtitle("C) ProbWJ")+theme(plot.title = element_text(size=8,face = "bold")),
+                GG.separate_scaffolds_Jexact_distance.s+ggtitle("D) Jexact")+theme(plot.title = element_text(size=8,face = "bold")),
+                common.legend = T,
+                legend = "bottom")
+
+ggsave(GRID,filename = "/media/kreising/DATA/data/BF_mysi/RESULTS_10.6.2024/PCOA_BF.pdf",
+       width = 18,height = 18,units = "cm")
+GRID
+
+```
+
+
+
+#PERMANOVA + BETADISPER WILD (for samples before the transplantation treatment)
+
+This part tests differences in composition (adonis2 function) and interindividual variation (betadisper function) between wild and laboratory population. 
+```{r warning=F,message=F}
+
+#1. Differences between wild and laboratory population
+FILTER<-sample_data(PHYLOSEQ.prop)$day_of_experiment%in%c("D0","D-1")
+PHYLOSEQ.prop_preinf<-prune_samples(FILTER,PHYLOSEQ.prop)
+SD<-data.frame(sample_data(PHYLOSEQ.prop_preinf))
+SD$ORIG<-ifelse(SD$strain_locality%in%c("BUSNA","BULS"),SD$strain_locality,"WILD")
+
+ADONIS_LIST<-list()
+BETA_LIST.1<-list()
+BETA_LIST.2<-list()
+
+for(i in 1:length(DIST_list)){
+   DIST_act<-DIST_list[[i]]
+   DIST_act<-DIST_act[sample_names(PHYLOSEQ.prop_preinf),sample_names(PHYLOSEQ.prop_preinf)]
+   ADONIS_LIST[[i]]<-adonis(as.dist(DIST_act)~SD$wild_lab)$aov.tab[1,]
+   BETA<-betadisper(as.dist(DIST_act),SD$ORIG)
+   BETA_LIST.1[[i]]<-anova(BETA)[1,]
+   BETA_LIST.2[[i]]<-TukeyHSD(BETA)$group[,4]
+
+}
+
+names(ADONIS_LIST)<-names(DIST_list)
+ADONIS_DF<-do.call("rbind",ADONIS_LIST)
+BETA_DF.1<-do.call("rbind",BETA_LIST.1)
+BETA_DF.2<-do.call("rbind",BETA_LIST.2)
+
+ADONIS_DF<-data.frame(Dissimilarity=names(DIST_list),ADONIS_DF)
+BETA_DF<-data.frame(Dissimilarity=names(DIST_list),BETA_DF.1,BETA_DF.2)
+
+write.table(ADONIS_DF ,file = "/media/kreising/DATA/data/BF_mysi/RESULTS_15.3.2022/PERMANOVA.txt",
+            sep="\t",row.names = F,quote = F)
+
+write.table(BETA_DF ,file = "/media/kreising/DATA/data/BF_mysi/RESULTS_15.3.2022/BETA_DF.txt",
+            sep="\t",row.names = F,quote = F)
+
+#2.Differences between localities in wild population
+FILTER<-!sample_data(PHYLOSEQ.prop)$strain_locality%in%c("BUSNA","BULS")
+PHYLOSEQ.prop_wild<-prune_samples(FILTER,PHYLOSEQ.prop)
+SD<-data.frame(sample_data(PHYLOSEQ.prop_wild))
+
+ADONIS_LIST<-list()
+
+for(i in 1:length(DIST_list)){
+   DIST_act<-DIST_list[[i]]
+   DIST_act<-DIST_act[sample_names(PHYLOSEQ.prop_wild),sample_names(PHYLOSEQ.prop_wild)]
+   ADONIS_LIST[[i]]<-adonis(as.dist(DIST_act)~SD$strain_locality)$aov.tab[1,]
+}
+
+names(ADONIS_LIST)<-names(DIST_list)
+ADONIS_DF<-do.call("rbind",ADONIS_LIST)
+ADONIS_DF<-data.frame(Dissimilarity=names(DIST_list),ADONIS_DF)
+
+
+write.table(ADONIS_DF ,file = "/media/kreising/DATA/data/BF_mysi/RESULTS_15.3.2022/PERMANOVA_wild.txt",
+            sep="\t",row.names = F,quote = F)
+
+
+#3. efekt kmene v ramci lab
+FILTER<-sample_data(PHYLOSEQ.prop)$strain_locality%in%c("BUSNA","BULS")
+PHYLOSEQ.prop_wild<-prune_samples(FILTER,PHYLOSEQ.prop)
+SD<-data.frame(sample_data(PHYLOSEQ.prop_wild))
+
+ADONIS_LIST<-list()
+
+for(i in 1:length(DIST_list)){
+   DIST_act<-DIST_list[[i]]
+   DIST_act<-DIST_act[sample_names(PHYLOSEQ.prop_wild),sample_names(PHYLOSEQ.prop_wild)]
+   ADONIS_LIST[[i]]<-adonis(as.dist(DIST_act)~SD$strain_locality)$aov.tab[1,]
+}
+
+names(ADONIS_LIST)<-names(DIST_list)
+ADONIS_DF<-do.call("rbind",ADONIS_LIST)
+ADONIS_DF<-data.frame(Dissimilarity=names(DIST_list),ADONIS_DF)
+
+write.table(ADONIS_DF ,file = "/media/kreising/DATA/data/BF_mysi/RESULTS_15.3.2022/PERMANOVA_BULS_BUSNA.txt",
+            sep="\t",row.names = F,quote = F)
+
+
+```
+
+
+# Alpha diversity  
+
+Calculates alpha diversity values (community richness and Shannon diversity) and merges them with sample metadata.
+```{r warning=F,message=F}
+
+PHYLOSEQ.allF.BP.tr<-transform_sample_counts(PHYLOSEQ.allF.BP, function(x) ifelse(x>0,1,0))
+
+RICH.sh<-estimate_richness(PHYLOSEQ.prop,measures = c("Shannon"))
+RICH.obs<-estimate_richness(PHYLOSEQ.01,measures = c("Observed"))
+RICH<-data.frame(RICH.sh,RICH.obs,sample_data(PHYLOSEQ.prop))
+
+```
+
+# Alpha diversity - statistics
+
+Differences in alpha diversity between laboratory and wild mice before the infection treatment
+
+```{r}
+RICH.sub<-RICH[RICH$day_of_experiment%in%c("D0","D-1"),]
+RICH.sub$KMEN<-ifelse(RICH.sub$strain_locality%in%c("BULS","BUSNA"),RICH.sub$strain_locality,"wild")
+RICH.sub$KMEN<-as.factor(RICH.sub$KMEN)
+
+#observed
+model<-lm(log10(Observed)~KMEN,data=RICH.sub)
+anova(model)
+TUK<- glht(model,  mcp(KMEN = "Tukey"))
+summary(TUK)
+LET_obs<-cld(TUK)
+
+#Shannon
+model<-lm(Shannon~KMEN,data=RICH.sub)
+anova(model)
+TUK<- glht(model,  mcp(KMEN = "Tukey"))
+summary(TUK)
+LET_sh<-cld(TUK)
+
+#plot
+LETTERS<-data.frame(LETTERS=c(LET_sh$mcletters$Letters,
+                              LET_obs$mcletters$Letters),
+                    KMEN=rep(names(LET_sh$mcletters$Letters),2),
+                    Alpha_div=rep(c(7,6000),each=3),
+                    INDEX=rep(c("Shannon","Observed"),each=3))
+
+
+DF.plot<-data.frame(rbind(RICH.sub,RICH.sub),
+                    INDEX=rep(c("Shannon","Observed"),each=dim(RICH.sub)[1]),
+                    Alpha_div=c(RICH.sub$Shannon,RICH.sub$Observed))
+
+gg<-ggplot(DF.plot, aes(y=Alpha_div,x=KMEN))+geom_boxplot(outlier.shape = NA)+geom_jitter()+facet_wrap(.~INDEX,scales = "free_y")+geom_text(data = LETTERS,aes(label=LETTERS))
+
+ggsave(gg,filename = "/media/kreising/DATA/data/BF_mysi/RESULTS_15.3.2022/BP_div_preexperiment.pdf",
+       width = 8,height = 8,units = "cm")
+gg
+
+save(gg, file = "/media/kreising/DATA/data/BF_mysi/RESULTS_15.3.2022/BP_div_preexperiment.R")
+```
+
+# Alpha diversity - statistics  
+
+variation in laboratory mice after the infection treatment
+
+```{r warning=F, message=F}
+##########################
+#2. lab behem experimentu#
+##########################
+RICH.sub<-RICH[RICH$strain_locality%in%c("BULS","BUSNA"),]
+
+#Observed (nic neni signifikantni)
+model<-lmer(log10(Observed)~strain_locality+day_of_experiment+experimental_group+
+              strain_locality:day_of_experiment+strain_locality:experimental_group+
+              day_of_experiment:experimental_group+
+              strain_locality:day_of_experiment:experimental_group+(1|mouse_ID),RICH.sub)
+
+model2<-lmer(log10(Observed)~strain_locality+day_of_experiment+experimental_group+
+              strain_locality:day_of_experiment+strain_locality:experimental_group+
+              day_of_experiment:experimental_group+(1|mouse_ID),RICH.sub)
+
+model3<-lmer(log10(Observed)~strain_locality+day_of_experiment+experimental_group+
+              strain_locality:day_of_experiment+strain_locality:experimental_group+
+              (1|mouse_ID),RICH.sub)
+
+model4<-lmer(log10(Observed)~strain_locality+day_of_experiment+experimental_group+
+              strain_locality:day_of_experiment+
+              (1|mouse_ID),RICH.sub)
+
+model5<-lmer(log10(Observed)~strain_locality+day_of_experiment+experimental_group+
+              (1|mouse_ID),RICH.sub)
+
+model6<-lmer(log10(Observed)~strain_locality+day_of_experiment+
+              (1|mouse_ID),RICH.sub)
+
+model7<-lmer(log10(Observed)~strain_locality+
+              (1|mouse_ID),RICH.sub)
+
+model8<-lmer(log10(Observed)~1+
+              (1|mouse_ID),RICH.sub)
+
+A1.obs<-anova(model,model2)
+A2.obs<-anova(model3,model2)
+A3.obs<-anova(model3,model4)
+A4.obs<-anova(model5,model4)
+A5.obs<-anova(model5,model6)
+A6.obs<-anova(model7,model6)
+A7.obs<-anova(model7,model8)
+
+Predictor<-c("strain x day x treatment","day x treatment","strain x treatment","strain x day",
+"treatment","day","strain")
+ANOVA.obs<-data.frame(rbind(A1.obs[2,],A2.obs[2,],A3.obs[2,],A4.obs[2,],A5.obs[2,],A6.obs[2,],A7.obs[2,]))
+ANOVA.obs<-data.frame(Predictor=Predictor,
+                      ANOVA.obs)
+
+#Shannon 
+model<-lmer(Shannon~strain_locality+day_of_experiment+experimental_group+
+              strain_locality:day_of_experiment+strain_locality:experimental_group+
+              day_of_experiment:experimental_group+
+              strain_locality:day_of_experiment:experimental_group+(1|mouse_ID),RICH.sub)
+
+model2<-lmer(Shannon~strain_locality+day_of_experiment+experimental_group+
+              strain_locality:day_of_experiment+strain_locality:experimental_group+
+              day_of_experiment:experimental_group+(1|mouse_ID),RICH.sub)
+
+model3<-lmer(Shannon~strain_locality+day_of_experiment+experimental_group+
+              strain_locality:day_of_experiment+strain_locality:experimental_group+
+              (1|mouse_ID),RICH.sub)
+
+model4<-lmer(Shannon~strain_locality+day_of_experiment+experimental_group+
+              strain_locality:day_of_experiment+
+              (1|mouse_ID),RICH.sub)
+
+model5<-lmer(Shannon~strain_locality+day_of_experiment+experimental_group+
+              (1|mouse_ID),RICH.sub)
+
+model6<-lmer(Shannon~strain_locality+day_of_experiment+
+              (1|mouse_ID),RICH.sub)
+
+model7<-lmer(Shannon~strain_locality+
+              (1|mouse_ID),RICH.sub)
+
+model8<-lmer(Shannon~1+
+              (1|mouse_ID),RICH.sub)
+
+A1.sh<-anova(model,model2)
+A2.sh<-anova(model3,model2)
+A3.sh<-anova(model3,model4)
+A4.sh<-anova(model5,model4)
+A5.sh<-anova(model5,model6)
+A6.sh<-anova(model7,model6)
+A7.sh<-anova(model7,model8)
+
+summary(model7)
+
+ANOVA.sh<-data.frame(rbind(A1.sh[2,],A2.sh[2,],A3.sh[2,],A4.sh[2,],A5.sh[2,],A6.sh[2,],A7.sh[2,]))
+ANOVA.sh<-data.frame(Predictor=Predictor,
+                      ANOVA.sh)
+
+ANOVA.obs.sub<-ANOVA.obs[,c(1,8,7,9)]
+names(ANOVA.obs.sub)[2:4]<-paste(names(ANOVA.obs.sub)[2:4],"obs",sep="_")
+ANOVA.sh.sub<-ANOVA.sh[,c(1,7,9)]
+names(ANOVA.sh.sub)[2:3]<-paste(names(ANOVA.sh.sub)[2:3],"sh",sep="_")
+
+ANOVA.all<-join(ANOVA.obs.sub,ANOVA.sh.sub)
+ANOVA.all
+
+write.table(ANOVA.all,file = "/media/kreising/DATA/data/BF_mysi/RESULTS_15.3.2022/BP_ANOVA.all.txt",
+            sep="\t",quote = F,row.names = F)
+
+#plot
+DF.plot<-data.frame(rbind(RICH.sub,RICH.sub),
+                    INDEX=rep(c("Shannon","Observed"),each=dim(RICH.sub)[1]),
+                    Alpha_div=c(RICH.sub$Shannon,RICH.sub$Observed))
+
+gg<-ggplot(DF.plot, aes(y=Alpha_div,x=strain_locality))+geom_boxplot(outlier.shape = NA)+geom_jitter()+facet_wrap(.~INDEX,scales = "free_y")
+
+DF.plot.obs<-DF.plot[DF.plot$INDEX=="Observed",]
+DF.plot.sh<-DF.plot[DF.plot$INDEX=="Shannon",]
+
+gg.obs<-ggplot(DF.plot.obs, aes(y=Alpha_div,x=day_of_experiment))+geom_boxplot(outlier.shape = NA)+geom_jitter()+facet_nested_wrap(.~strain_locality+experimental_group,scales = "free",nrow = 1)+
+  ggtitle("A) Observed contigs")
+
+gg.sh<-ggplot(DF.plot.sh, aes(y=Alpha_div,x=day_of_experiment))+geom_boxplot(outlier.shape = NA)+geom_jitter()+facet_nested_wrap(.~strain_locality+experimental_group,scales = "free",nrow = 1)+
+  ggtitle("B) Shannon diversity")
+
+GRID<-ggarrange(gg.obs,gg.sh,nrow = 2)
+
+ggsave(GRID,filename = "/media/kreising/DATA/data/BF_mysi/RESULTS_15.3.2022/BP_div_experiment.pdf",
+       width = 12,height = 12,units = "cm")
+
+GRID
+```
+
+# Taxonomy 
+
+Barplots summarizing relative abundances of phage families.
+
+```{r}
+newTax_diamond<-read.delim("/media/kreising/DATA/data/BF_mysi/REVISON_ISME/diamond_blastn_taxonomy_all",header = T)
+newTax_diamond<-newTax_diamond[,1:3]
+# head(newTax_diamond)
+
+
+#TO TaxTable
+newTax_diamond.tax<-tax_table(newTax_diamond[,2:3])
+colnames(newTax_diamond.tax)<-colnames(newTax_diamond[2:3])
+NAMES<-sapply(strsplit(newTax_diamond[,1], "_"), function(x) x[2], simplify=T)
+NAMES<-paste0("NODE.",NAMES)  
+taxa_names(newTax_diamond.tax)<-NAMES
+
+PHYLOSEQ.prop.diamond<-PHYLOSEQ.prop
+
+tax_table(PHYLOSEQ.prop.diamond)<-newTax_diamond.tax
+
+PHYLOSEQ.allF.BP.diamond<-PHYLOSEQ.allF.BP
+
+tax_table(PHYLOSEQ.allF.BP.diamond)<-newTax_diamond.tax
+
+
+PHYLOS.sub<-tax_glom(PHYLOSEQ.prop.diamond,"family",NArm = F)
+PHYLOS.sub.diamond<-PHYLOS.sub
+
+tax_table(PHYLOS.sub)[,"family"]<-gsub("unassigned","Unassigned",tax_table(PHYLOS.sub)[,"family"])
+phylum.prop = tapply(taxa_sums(PHYLOS.sub), tax_table(PHYLOS.sub)[, "family"], sum, na.rm = TRUE)/dim(otu_table(PHYLOS.sub))[2]
+(rev(sort(phylum.prop)))
+top8phyla = names(rev(sort(phylum.prop))[1:15])
+
+mdf = psmelt(PHYLOS.sub)
+mdf$family[!mdf$family%in%top8phyla]<-"others"
+mdf$family<-gsub("unass_","",mdf$family)
+
+mdf$experimental_group<-as.factor(mdf$experimental_group)
+mdf$strain_locality<-as.factor(mdf$strain_locality)
+levels(mdf$strain_locality)<-c("Buls","Busna","Jed","Nlc","Vpol")
+levels(mdf$experimental_group)<-c("cont.","don.","recip.")
+
+p = ggplot(mdf, aes_string(x = "Sample", y = "Abundance", fill = "family",order="family"))+theme_bw()
+p = p + geom_bar(stat = "identity", position = "stack")
+p = p + theme(axis.text.x = element_text(angle = -90, hjust = 0,size=5),axis.text.y = element_text(hjust = 0,size=5),axis.title.x = element_text(size=0))
+p <- p + facet_nested(.~strain_locality+day_of_experiment+experimental_group, scales = "free", space = "free",nest_line = F)+
+  theme(strip.text = element_text(size = 8, angle = 0)) +
+  scale_fill_manual(values = c25)
+p<-p+theme(legend.position = "bottom")
+p_dimanond<-p
+
+ggsave(p_dimanond,filename = "/media/kreising/DATA/data/BF_mysi/RESULTS_10.6.2024/class_diamond.pdf",
+       width = 18,height = 12,units = "cm")
+save(p_dimanond,file = "/media/kreising/DATA/data/BF_mysi/RESULTS_10.6.2024/p_dimanond.R")
+
+
+```
+
+# Heatmap for dominant phage contigs
+Ten most abundant contigs selected for each samples and used in the heatmap 
+
+```{r fig.width=15,fig.height=20}
+
+FILTER<-sample_data(PHYLOSEQ.allF.BP.diamond)$day_of_experiment%in%c("D0","D-1")
+PHYLOSEQ.allF_preinf<-prune_samples(FILTER,PHYLOSEQ.allF.BP.diamond)
+
+PHYLOSEQ.allF_preinf.prop<-transform_sample_counts(PHYLOSEQ.allF_preinf,function(x) x/sum(x))
+
+#10 most abundant for each sample
+OTU_TAB<-otu_table(PHYLOSEQ.allF_preinf.prop)
+class(OTU_TAB)<-"matrix"
+colnames(OTU_TAB)<-sample_data(PHYLOSEQ.allF_preinf.prop)$seq_correct_label
+   
+NAMES<-as.character()
+i<-1
+for(i in 1:dim(OTU_TAB)[2]){
+   ACT<-rev(sort(OTU_TAB[,i]))[1:10]
+   NAMES<-c(NAMES,names(ACT))
+}
+
+OTU_TAB.sub<-OTU_TAB[rownames(OTU_TAB)%in%NAMES,]
+colnames(OTU_TAB.sub)<-gsub("_m1","",colnames(OTU_TAB.sub))
+PHYLOSEQ.allF_preinf.abund<-prune_taxa(taxa_names(PHYLOSEQ.allF_preinf.prop)%in%NAMES,
+                                       PHYLOSEQ.allF_preinf.prop)
+
+####################
+####COL ANNOTATION##
+####################
+ANO_PARAM_col<- list(
+        enviro = list(
+               title_gp = gpar(fontsize = 0, fontface = "plain"),
+               labels_gp = gpar(fontsize = 6),
+               nrow=1)
+            )
+
+
+ENV<-sample_data(PHYLOSEQ.allF_preinf.prop)$strain_locality
+ENV[!ENV%in%c("BULS","BUSNA")]<-"wild"
+
+P25.ENV<- c25[1:3]
+names(P25.ENV)<-unique(ENV)
+
+column_ha = HeatmapAnnotation(enviro=ENV, 
+                              # subsp=SUB,
+                              col =  list(enviro=P25.ENV),
+                              annotation_legend_param=ANO_PARAM_col,
+                              annotation_name_gp = gpar(fontsize = 0, fontface = "bold"),
+                              simple_anno_size = unit(0.2, "cm"))
+title_gp = gpar(fontsize = 14)
+####################
+####ROW ANNOTATION##
+####################
+
+ANO_PARAM_row<- list(
+            class = list(
+               title_gp = gpar(fontsize = 0, fontface = "plain"),
+               labels_gp = gpar(fontsize = 6))
+            )
+
+
+CLASS<-as.character(tax_table(PHYLOSEQ.allF_preinf.abund)[,"family"])
+CLASS<-gsub("unass_","",CLASS)
+CLASS<-gsub("Unassigned","unassigned",CLASS)
+CLASS<-gsub("viridae","v.",CLASS)
+CLASS<-gsub("unassigned","unass.",CLASS)
+CLASS<-gsub("viricetes","viric.",CLASS)
+
+
+LL<-(unique(CLASS))
+P25.class<- c25[1:length(LL)]
+names(P25.class)<-LL
+row_ha = rowAnnotation(class = CLASS,
+                       annotation_legend_param=ANO_PARAM_row,
+                       show_annotation_name = F,
+                       annotation_width=50,
+                       col =  list(class=P25.class),
+                       width = unit(0.5, "cm"),
+                       simple_anno_size = unit(0.2, "cm"))
+
+#color scale
+library(circlize)
+col_fun = colorRamp2(c(0, 0.5), c("white", "red"))
+col_fun.s = colorRamp2(c(-1,0, 4), c("blue","white", "red"))
+
+
+########################
+##HEATMAPS##############
+########################
+#sq ret
+H2<-Heatmap(OTU_TAB.sub^0.5, col = col_fun,
+            top_annotation =column_ha,
+            right_annotation = row_ha,
+            clustering_method_rows = "ward.D2",
+            clustering_method_columns = "ward.D2",
+            row_names_gp = gpar(fontsize = 0),
+            column_names_gp = gpar(fontsize = 4),
+            column_title_gp = gpar(fontsize = 0),
+            row_title_gp = gpar(fontsize = 0),
+            heatmap_legend_param=list(title_gp = gpar(fontsize = 0, fontface = "plain"),
+                                      labels_gp = gpar(fontsize = 6),
+                                      legend_direction = "vertical")
+            )
+
+
+while (!is.null(dev.list()))  dev.off()
+cairo_pdf(filename = "/media/kreising/DATA/data/BF_mysi/RESULTS_10.6.2024/Heatmap_sqrt.pdf",
+          width = 8/2.54, height =  14/2.54)
+   #draw(H1)
+   draw(H2,heatmap_legend_side="right", annotation_legend_side="bottom")
+dev.off()
+```
+
+
+# Differential abundance analysis
+
+Variation of phage families between wild and laboratory mice from the pre-infection stage of the experiment
+
+```{r}
+FILTER<-sample_data(PHYLOSEQ.allF.BP.diamond)$day_of_experiment%in%c("D0","D-1")
+PHYLOSEQ.allF_preinf<-prune_samples(FILTER,PHYLOSEQ.allF.BP.diamond)
+
+PHYLOSEQ.allF_preinf<-tax_glom(PHYLOSEQ.allF_preinf,"family",NArm = F)
+PHYLOSEQ.allF_preinf<-transform_sample_counts(PHYLOSEQ.allF_preinf, function(x) round(x,0))
+
+OTU_T<-data.frame(t(otu_table(PHYLOSEQ.allF_preinf)))
+OTU_T<-mvabund(OTU_T)
+SD<-sample_data(PHYLOSEQ.allF_preinf)
+SD$wild_lab2<-ifelse(SD$wild_lab=="WILD","WILD",SD$strain_locality)
+MANYGLM<-manyglm(OTU_T~SD$wild_lab, family="negative.binomial")
+ANOVA<-anova(MANYGLM,p.uni="adjusted")
+UNI<-ANOVA$uni.p
+SIG<-colnames(UNI)[UNI[2,]<0.05]
+
+PHYLOSEQ.allF_preinf.sub<-prune_taxa(taxa_names(PHYLOSEQ.allF_preinf)%in%SIG,
+                                     PHYLOSEQ.allF_preinf)
+
+tax_table(PHYLOSEQ.allF_preinf.sub)
+
+TT<-phyloseq_2_GG(which.taxa=SIG,
+              which.phyloseq=PHYLOSEQ.allF_preinf,
+              manage.ussigned=T,unassign.string=NA)
+TT$wild_lab2<-ifelse(TT$wild_lab=="WILD","WILD",TT$strain_locality)
+# TT$family<-gsub("viridae","v.",TT$family)
+GG<-ggplot(TT,aes(y=Abundance/Seq.tot,x=wild_lab2))+geom_boxplot(outlier.shape = NA)+
+   geom_jitter(alpha=0.5,size =0.5)+facet_wrap(.~family,scales = "free")
+
+
+GG.s<-small_fig(GG+theme_bw())
+
+GG.s<-GG.s+ylab("Proportion")+theme(axis.title.x = element_blank(),
+                                    axis.text.x = element_text(angle=90, hjust = 1, vjust = 0.5))
+
+ggsave(GG.s,filename = "/media/kreising/DATA/data/BF_mysi/RESULTS_10.6.2024/BF_diff_abund.pdf",
+       width = 12,height = 10,units = "cm")
+GG.s
+```
+
+
+# Hosts predictions (iPHOP)
+
+Pie chart summarizing predicted proportions of predicted phage hosts (family level)
+
+```{r, fig.width=15,fig.height=20}
+HP80b<-read.delim("/media/kreising/DATA/data/BF_mysi/Host_predictions_iPHOP/host_predictions/Host_prediction_to_genus_m75_unique_clean.txt")
+
+HP80b.tax<-HP80b[,5:9]
+HP80b.tax<-tax_table(HP80b.tax)
+
+NODE<-HP80b$NODE
+NODE<-gsub("NODE_","NODE.",NODE)
+NODE<-sapply(strsplit(NODE, "_"), function(x) x[1], simplify=T)
+taxa_names(HP80b.tax)<-NODE
+colnames(HP80b.tax)<-names(HP80b[,5:9])
+
+PHYLOSEQ.allF_pred.hosts<-PHYLOSEQ.allF.BP
+tax_table(PHYLOSEQ.allF_pred.hosts)<-HP80b.tax
+
+Phylum<- as.logical(tax_table(PHYLOSEQ.allF_pred.hosts)[,"phylum"]!="no_prediction")
+Class<- as.logical(tax_table(PHYLOSEQ.allF_pred.hosts)[,"class"]!="no_prediction")
+Order<- as.logical(tax_table(PHYLOSEQ.allF_pred.hosts)[,"order"]!="no_prediction")
+Family<- as.logical(tax_table(PHYLOSEQ.allF_pred.hosts)[,"family"]!="no_prediction")
+Genus<- as.logical(tax_table(PHYLOSEQ.allF_pred.hosts)[,"genus"]!="no_prediction")
+
+PHYLOSEQ.allF_pred.hosts.prop<-transform_sample_counts(PHYLOSEQ.allF_pred.hosts,function(x) x/sum(x))
+PHYLOSEQ.allF_pred.hosts.prop.s<-prune_taxa(Phylum,PHYLOSEQ.allF_pred.hosts.prop)
+sum(otu_table(PHYLOSEQ.allF_pred.hosts.prop.s))/sum(otu_table(PHYLOSEQ.allF_pred.hosts.prop))
+
+##########################
+#Family####################
+##########################
+
+PHYLOSEQ.allF_pred.hosts.class<-tax_glom(PHYLOSEQ.allF_pred.hosts.prop,"family")
+
+#Summary
+PHYLOSEQ.allF_pred.hosts.class.prop<-transform_sample_counts(PHYLOSEQ.allF_pred.hosts.class, function (x) x/sum(x))
+
+Hosts_class<-apply(otu_table(PHYLOSEQ.allF_pred.hosts.class.prop),1,mean)
+names(Hosts_class)<-as.character(tax_table(PHYLOSEQ.allF_pred.hosts.class.prop)[,"family"])
+Hosts_class<-data.frame(av.prop=Hosts_class,taxa=names(Hosts_class))
+
+#plot
+DF.class<-Hosts_class
+#filter low abundance
+FILTER<-tapply(DF.class$av.prop,DF.class$taxa,max)>0.01
+FILTER.hi<-names(FILTER)[FILTER==T]
+DF.class.high<-DF.class[DF.class$taxa%in%FILTER.hi,]
+ADD<-data.frame(av.prop=1-sum(DF.class.high$av.prop),
+                taxa="others")
+DF.class.high<-rbind(DF.class.high,ADD)
+
+DF.class.high$taxa<-gsub("bacteria","b.",DF.class.high$taxa)
+
+
+sum(DF.class.high$av.prop)
+label_col <- DF.class.high %>%
+  arrange(desc(taxa)) %>%
+  mutate(cumsum = cumsum(av.prop),
+         mid = av.prop/2,
+         pos = cumsum - mid,
+         prop = paste(100*round(av.prop/sum(av.prop), 2), "%"))
+
+
+gg_pie<-ggplot(data=DF.class.high, aes(x="", y=av.prop, fill=taxa)) +
+               geom_bar(stat="identity", width=1, color = "white", size = 0.5) +
+               geom_text(data = label_col, aes(x = 1.3, y = pos, label = prop),size=2) +
+               coord_polar("y", start=0, clip = "off")+
+               theme_void() +
+               scale_fill_manual(values = c25)
+
+gg_pie.family<-gg_pie
+gg_pie.family
+gg_pie.family.s<-gg_pie.family+
+                              theme(axis.text = element_text(size=0),
+                                   axis.title = element_text(size=0),
+                                   strip.text = element_text(size=0),
+                                   plot.title = element_text(size=0),
+                                   legend.title = element_blank(),
+                                   legend.text = element_text(size=8),
+                                   legend.position = "bottom",
+                                   legend.spacing.y = unit(0.05, 'cm'),
+                                   legend.key.size = unit(0.3, "cm"))+guides(fill=guide_legend(ncol = 2,byrow=TRUE))
+
+ggsave(gg_pie.family.s,filename = "/media/kreising/DATA/data/BF_mysi/RESULTS_10.6.2024/BFhost_pie_family.pdf",
+       width = 8, height = 13, units = "cm")
+```
+
+
+# Hosts predictions (iPHOP+PCoA+PERMANOVA)
+
+Principal coordinate analysis and PERMANOVA (i.e. adonis2) analysis showing variation in phage community composition between wild mice and laboratory strains in terms of predicted hosts.
+
+```{r}
+
+PHYLOSEQ.allF_pred.hosts.prop<-transform_sample_counts(PHYLOSEQ.allF_pred.hosts.prop, 
+                                                       function(x) x/sum(x))
+
+
+FILTER<-sample_data(PHYLOSEQ.allF_pred.hosts.prop)$day_of_experiment%in%c("D0","D-1")
+PHYLOSEQ.allF_pred.hosts.prop_preinf<-prune_samples(FILTER,PHYLOSEQ.allF_pred.hosts.prop)
+
+sample_data(PHYLOSEQ.allF_pred.hosts.prop)$strain_locality2<-ifelse(sample_data(PHYLOSEQ.allF_pred.hosts.prop)$wild_lab=="WILD",
+                                                                    "WILD",
+                                                                    sample_data(PHYLOSEQ.allF_pred.hosts.prop)$strain_locality)
+
+
+PHYLOSEQ.allF_pred.hosts.prop.family<-tax_glom(PHYLOSEQ.allF_pred.hosts.prop,"family", NArm=F)
+
+
+##########
+#PCoA#####
+##########
+
+BC.family<-vegdist(t(otu_table(PHYLOSEQ.allF_pred.hosts.prop.family))^0.5)
+
+ORD<-ordinate(PHYLOSEQ.allF_pred.hosts.prop.family,BC.family,method = "PCoA")
+
+GG<-plot_ordination(PHYLOSEQ.allF_pred.hosts.prop.family,ORD,
+                    color="strain_locality2")
+
+GG.class<-GG
+GG.class<-GG.class+theme_bw()+theme(legend.title = element_blank())
+small_fig<-function(gg){
+  gg+theme(axis.text = element_text(size=8),
+           axis.title = element_text(size=8),
+           strip.text = element_text(size=8),
+           plot.title = element_text(size=8),
+           legend.text = element_text(size=8))
+   }
+GG.family.s<-small_fig(GG.class)
+
+ggsave(GG.family.s+theme(legend.position = "bottom"),filename = "/media/kreising/DATA/data/BF_mysi/RESULTS_10.6.2024/BFhost_PCOA_family.pdf",
+       width = 8,height = 8, units = "cm")
+GG.family.s
+
+
+##############################
+#PERMANOVA####################
+##############################
+
+SD<-sample_data(PHYLOSEQ.allF_pred.hosts.prop.family)
+class(SD)<-"data.frame"
+adonis2(BC.family~SD$wild_lab)
+
+
+#lab strains#############
+
+PHYLOSEQ.allF_pred.hosts.prop.family.sub<-prune_samples(SD$wild_lab=="LAB",PHYLOSEQ.allF_pred.hosts.prop.family)
+BC.family.sub<-vegdist(t(otu_table(PHYLOSEQ.allF_pred.hosts.prop.family.sub))^0.5)
+SD.sub<-sample_data(PHYLOSEQ.allF_pred.hosts.prop.family.sub)
+class(SD.sub)<-"data.frame"
+adonis2(BC.family.sub~SD.sub$strain_locality)
+```
+
+# Variation in phage community composition (dissimilarities) due to the transplantation
+
+## Dissimilarities - donor vs  control
+
+This part extract dissimilarity values for donors vs. controls from the dissimilarity matrix.
+
+```{r warning=F, message=F,fig.width=12,fig.height=15}
+PHYLOSEQ.prop.sub2<-prune_samples(sample_data(PHYLOSEQ.prop)$experimental_group%in%c("control","donor"),PHYLOSEQ.prop)
+PHYLOSEQ.01.sub2<-prune_samples(sample_data(PHYLOSEQ.01)$experimental_group%in%c("control","donor"),PHYLOSEQ.01)
+
+donor_control_dist<-function(PHYLO,DIST_act){
+   DIST_act<-as.matrix(DIST_act)
+   DIST_act.o<-DIST_act[sample_names(PHYLO),sample_names(PHYLO)]
+
+   SD<-sample_data(PHYLO)
+   class(SD)<-"data.frame"
+   FILTER<-sample_data(PHYLO)$experimental_group=="donor"
+   SD.sub1<-SD[!FILTER,] #data.frame pro ostatni 
+   SD.sub2<-SD[FILTER,] # data.frame pro sources
+ 
+   #zdroje v radcich infikovane ve sloucich
+   DIST_act.f<-DIST_act.o[FILTER,!FILTER] 
+   
+   DIST_act.f.l<-melt(DIST_act.f)
+   names(DIST_act.f.l)<-c("donor","seq_sample_ID","disim")
+   class(SD.sub1)<-"data.frame"
+   DIST_act.f.l<-join(DIST_act.f.l,SD.sub1)
+   DIST_act.f.l
+ 
+}
+
+DON.CONT_separate_reads_probWJ_distance<-donor_control_dist(PHYLO = PHYLOSEQ.prop.sub2, 
+                                                       DIST_act = DIST_list$separate_reads_probWJ_distance)
+DON.CONT_separate_scaffolds_Jexact_distance<-donor_control_dist(PHYLO = PHYLOSEQ.prop.sub2, 
+                                                       DIST_act = DIST_list$separate_scaffolds_Jexact_distance)
+DON.CONT_BC<-donor_control_dist(PHYLO = PHYLOSEQ.prop.sub2, 
+                                                       DIST_act = DIST_list$BC)
+DON.CONT_JA<-donor_control_dist(PHYLO = PHYLOSEQ.prop.sub2, 
+                                                       DIST_act = DIST_list$JA)
+
+
+DON.CONT_separate_reads_probWJ_distance$Type<-"Donor_Control"
+DON.CONT_separate_scaffolds_Jexact_distance$Type<-"Donor_Control"
+DON.CONT_BC$Type<-"Donor_Control"
+DON.CONT_JA$Type<-"Donor_Control"
+
+```
+
+#Disimilarites for control ~ recipient
+This part extract dissimilarity values for donors vs. respective recipient from the dissimilarity matrix.
+
+```{r warning=F, message=F,fig.width=12,fig.height=15}
+PHYLOSEQ.prop.sub<-prune_samples(sample_data(PHYLOSEQ.prop)$experimental_group%in%c("recipient","donor"),PHYLOSEQ.prop)
+PHYLOSEQ.01.sub<-prune_samples(sample_data(PHYLOSEQ.01)$experimental_group%in%c("recipient","donor"),PHYLOSEQ.01)
+
+DIST_list=DIST_list
+
+#tohle uze jde do funkce
+
+i<-1
+DIST_act<-DIST_list[[i]]
+PHYLO=PHYLOSEQ.prop.sub
+###################################
+#tohle uze jde do funkce##########
+
+donor_acceptor_dist<-function(PHYLO,DIST_act){
+   DIST_act<-as.matrix(DIST_act)
+   DIST_act.o<-DIST_act[sample_names(PHYLO),sample_names(PHYLO)]
+
+   SD<-sample_data(PHYLO)
+   class(SD)<-"data.frame"
+   FILTER<-sample_data(PHYLO)$experimental_group=="donor"
+   SD.sub1<-SD[!FILTER,] #data.frame pro ostatni 
+   SD.sub2<-SD[FILTER,] # data.frame pro sources
+ 
+   #zdroje v radcich infikovane ve sloucich
+   DIST_act.f<-DIST_act.o[FILTER,!FILTER] 
+
+   TEST.VECT<-SD.sub1$donor_identity #tohle jsou zdroje/donori pro danou laboratornik mys
+
+   DIST_vect<-as.numeric()
+   for(i in 1:length(TEST.VECT)){
+      #print(i)
+      DIST_vect[i]<-DIST_act.f[rownames(DIST_act.f)==TEST.VECT[i],i]
+   }
+
+   DF<-data.frame(donor=TEST.VECT,seq_sample_ID=colnames(DIST_act.f),disim=DIST_vect)
+   DF2<-join(DF,SD)
+   DF2
+}
+
+
+DON.REC_separate_reads_probWJ_distance<-donor_acceptor_dist(PHYLO = PHYLOSEQ.prop.sub, 
+                                                       DIST_act = DIST_list$separate_reads_probWJ_distance)
+DON.REC_separate_scaffolds_Jexact_distance<-donor_acceptor_dist(PHYLO = PHYLOSEQ.prop.sub, 
+                                                       DIST_act = DIST_list$separate_scaffolds_Jexact_distance)
+DON.REC_BC<-donor_acceptor_dist(PHYLO = PHYLOSEQ.prop.sub, 
+                                                       DIST_act = DIST_list$BC)
+DON.REC_JA<-donor_acceptor_dist(PHYLO = PHYLOSEQ.prop.sub, 
+                                                       DIST_act = DIST_list$JA)
+
+DON.REC_separate_reads_probWJ_distance$Type<-"Donor_Recipient"
+DON.REC_separate_scaffolds_Jexact_distance$Type<-"Donor_Recipient"
+DON.REC_BC$Type<-"Donor_Recipient"
+DON.REC_JA$Type<-"Donor_Recipient"
+
+```
+
+
+Here tables containing donor vs controls and donor vs. recipients dissimilarities are merged 
+
+```{r warning=F, message=F,fig.width=12,fig.height=15}
+
+BOTH_separate_reads_probWJ_distance<-rbind(DON.REC_separate_reads_probWJ_distance,DON.CONT_separate_reads_probWJ_distance)
+BOTH_separate_scaffolds_Jexact_distance<-rbind(DON.REC_separate_scaffolds_Jexact_distance,DON.CONT_separate_scaffolds_Jexact_distance)
+BOTH_BC<-rbind(DON.REC_BC,DON.CONT_BC)
+BOTH_JA<-rbind(DON.REC_JA,DON.CONT_JA)
+
+
+```
+
+# Linear mixed effect models
+
+In the following sections, mixed-effects models are fitted. The first model included a three-way interaction between the day of the experiment, the mouse strain and the experimental group (i.e. recipient vs. control, the "type" variable). This interaction was significant in all cases, indicating that the effect of transplantation is significant and differs between the two recipient strains. Therefore, separate analyses for the data subsets (BULS and BUSNA mice) are fitted in the next sections. The models were fitted with the glmer function assuming a gamma distribution.
+
+**Models for Bray-Curtis dissimilarities**
+```{r warning=F, message=F,fig.width=12,fig.height=15}
+#BRAY
+model.1<-glmer(disim~day_of_experiment+Type+strain_locality+
+                    day_of_experiment:Type+day_of_experiment:strain_locality+
+                    Type:strain_locality+
+                    day_of_experiment:Type:strain_locality+
+                    (1|mouse_ID)+(1|donor),BOTH_BC,family = Gamma)
+
+#day_of_experiment:Type:strain_locality+
+model.2<-glmer(disim~day_of_experiment+Type+strain_locality+
+                    day_of_experiment:Type+day_of_experiment:strain_locality+
+                    Type:strain_locality+
+                    (1|mouse_ID)+(1|donor),BOTH_BC,family = Gamma)
+
+#Type:strain_locality+
+model.3<-glmer(disim~day_of_experiment+Type+strain_locality+
+                    day_of_experiment:Type+day_of_experiment:strain_locality+
+                    (1|mouse_ID)+(1|donor),BOTH_BC,family = Gamma)
+
+#day_of_experiment:strain_locality+
+model.4<-glmer(disim~day_of_experiment+Type+strain_locality+
+                    day_of_experiment:Type+
+                    (1|mouse_ID)+(1|donor),BOTH_BC,family = Gamma)
+
+#day_of_experiment:Type+
+model.5<-glmer(disim~day_of_experiment+Type+strain_locality+
+                    day_of_experiment:strain_locality+
+                    (1|mouse_ID)+(1|donor),BOTH_BC,family = Gamma)
+
+AN1<-anova(model.1,model.2)
+AN2<-anova(model.2,model.3)
+AN3<-anova(model.3,model.4)
+AN4<-anova(model.3,model.5)
+
+TABLE<-rbind(AN1[2,],AN2[2,],AN3[2,],AN4[2,])
+TABLE<-TABLE[,6:8]
+TABLE[,c(1,3)]<-round(TABLE[,c(1,3)],5)
+TABLE<-data.frame(Predictor=c("Day x Strain x Type","Strain x Type", "Day x Strain","Day  x Type"),
+                  TABLE)
+TABLE_BC<-TABLE
+TABLE
+```
+
+
+**Models for Jaccard dissimilarities**
+
+```{r warning=F, message=F,fig.width=12,fig.height=15}
+#JACCARD
+model.1<-glmer(disim~day_of_experiment+Type+strain_locality+
+                    day_of_experiment:Type+day_of_experiment:strain_locality+
+                    Type:strain_locality+
+                    day_of_experiment:Type:strain_locality+
+                    (1|mouse_ID)+(1|donor),BOTH_JA,family = Gamma)
+
+#day_of_experiment:Type:strain_locality+
+model.2<-glmer(disim~day_of_experiment+Type+strain_locality+
+                    day_of_experiment:Type+day_of_experiment:strain_locality+
+                    Type:strain_locality+
+                    (1|mouse_ID)+(1|donor),BOTH_JA,family = Gamma)
+
+#Type:strain_locality+
+model.3<-glmer(disim~day_of_experiment+Type+strain_locality+
+                    day_of_experiment:Type+day_of_experiment:strain_locality+
+                    (1|mouse_ID)+(1|donor),BOTH_JA,family = Gamma)
+
+#day_of_experiment:strain_locality+
+model.4<-glmer(disim~day_of_experiment+Type+strain_locality+
+                    day_of_experiment:Type+
+                    (1|mouse_ID)+(1|donor),BOTH_JA,family = Gamma)
+
+#day_of_experiment:Type+
+model.5<-glmer(disim~day_of_experiment+Type+strain_locality+
+                    day_of_experiment:strain_locality+
+                    (1|mouse_ID)+(1|donor),BOTH_JA,family = Gamma)
+
+AN1<-anova(model.1,model.2)
+AN2<-anova(model.2,model.3)
+AN3<-anova(model.3,model.4)
+AN4<-anova(model.3,model.5)
+
+TABLE<-rbind(AN1[2,],AN2[2,],AN3[2,],AN4[2,])
+TABLE<-TABLE[,6:8]
+TABLE[,c(1,3)]<-round(TABLE[,c(1,3)],5)
+TABLE<-data.frame(Predictor=c("Day x Strain x Type","Strain x Type", "Day x Strain","Day  x Type"),
+                  TABLE)
+TABLE_JA<-TABLE
+TABLE
+```
+
+**Models for Jexact dissimilarities**
+
+```{r warning=F, message=F,fig.width=12,fig.height=15}
+
+model.1<-glmer(disim~day_of_experiment+Type+strain_locality+
+                    day_of_experiment:Type+day_of_experiment:strain_locality+
+                    Type:strain_locality+
+                    day_of_experiment:Type:strain_locality+
+                    (1|mouse_ID)+(1|donor),BOTH_separate_scaffolds_Jexact_distance,family = Gamma)
+
+#day_of_experiment:Type:strain_locality+
+model.2<-glmer(disim~day_of_experiment+Type+strain_locality+
+                    day_of_experiment:Type+day_of_experiment:strain_locality+
+                    Type:strain_locality+
+                    (1|mouse_ID)+(1|donor),BOTH_separate_scaffolds_Jexact_distance,family = Gamma)
+
+#Type:strain_locality+
+model.3<-glmer(disim~day_of_experiment+Type+strain_locality+
+                    day_of_experiment:Type+day_of_experiment:strain_locality+
+                    (1|mouse_ID)+(1|donor),BOTH_separate_scaffolds_Jexact_distance,family = Gamma)
+
+#day_of_experiment:strain_locality+
+model.4<-glmer(disim~day_of_experiment+Type+strain_locality+
+                    day_of_experiment:Type+
+                    (1|mouse_ID)+(1|donor),BOTH_separate_scaffolds_Jexact_distance,family = Gamma)
+
+#day_of_experiment:Type+
+model.5<-glmer(disim~day_of_experiment+Type+strain_locality+
+                    day_of_experiment:strain_locality+
+                    (1|mouse_ID)+(1|donor),BOTH_separate_scaffolds_Jexact_distance,family = Gamma)
+
+AN1<-anova(model.1,model.2)
+AN2<-anova(model.2,model.3)
+AN3<-anova(model.3,model.4)
+AN4<-anova(model.3,model.5)
+
+TABLE<-rbind(AN1[2,],AN2[2,],AN3[2,],AN4[2,])
+TABLE<-TABLE[,6:8]
+TABLE[,c(1,3)]<-round(TABLE[,c(1,3)],5)
+TABLE<-data.frame(Predictor=c("Day x Strain x Type","Strain x Type", "Day x Strain","Day  x Type"),
+                  TABLE)
+TABLE_separate_scaffolds_Jexact_distance<-TABLE
+TABLE
+```
+
+**Models for probWJ dissimilarities**
+
+```{r warning=F, message=F,fig.width=12,fig.height=15}
+
+model.1<-glmer(disim~day_of_experiment+Type+strain_locality+
+                    day_of_experiment:Type+day_of_experiment:strain_locality+
+                    Type:strain_locality+
+                    day_of_experiment:Type:strain_locality+
+                    (1|mouse_ID)+(1|donor),BOTH_separate_reads_probWJ_distance,family = Gamma)
+
+#day_of_experiment:Type:strain_locality+
+model.2<-glmer(disim~day_of_experiment+Type+strain_locality+
+                    day_of_experiment:Type+day_of_experiment:strain_locality+
+                    Type:strain_locality+
+                    (1|mouse_ID)+(1|donor),BOTH_separate_reads_probWJ_distance,family = Gamma)
+
+#Type:strain_locality+
+model.3<-glmer(disim~day_of_experiment+Type+strain_locality+
+                    day_of_experiment:Type+day_of_experiment:strain_locality+
+                    (1|mouse_ID)+(1|donor),BOTH_separate_reads_probWJ_distance,family = Gamma)
+
+#day_of_experiment:strain_locality+
+model.4<-glmer(disim~day_of_experiment+Type+strain_locality+
+                    day_of_experiment:Type+
+                    (1|mouse_ID)+(1|donor),BOTH_separate_reads_probWJ_distance,family = Gamma)
+
+#day_of_experiment:Type+
+model.5<-glmer(disim~day_of_experiment+Type+strain_locality+
+                    day_of_experiment:strain_locality+
+                    (1|mouse_ID)+(1|donor),BOTH_separate_reads_probWJ_distance,family = Gamma)
+
+AN1<-anova(model.1,model.2)
+AN2<-anova(model.2,model.3)
+AN3<-anova(model.3,model.4)
+AN4<-anova(model.3,model.5)
+
+TABLE<-rbind(AN1[2,],AN2[2,],AN3[2,],AN4[2,])
+TABLE<-TABLE[,6:8]
+TABLE[,c(1,3)]<-round(TABLE[,c(1,3)],5)
+TABLE<-data.frame(Predictor=c("Day x Strain x Type","Strain x Type", "Day x Strain","Day  x Type"),
+                  TABLE)
+TABLE_separate_reads_probWJ_distance<-TABLE
+TABLE
+```
+
+
+# The effect of trasplantation separately for each mouse strain 
+In previous analyses, the threeway interaction between the day of experiment, mouse strain, and treatment level (donor vs. recipient) was significant for all types of community dissimilarities. This indicates that the effect of transplantation is significant and differs between the two recipient strains. The next analyses are mainly performed using the sep_models() function. This function:
+
+1: Evaluates the two-way interaction between experimental day and transplant treatment (control vs. infected) separately for BULS and BUSNA to test whether the effect of transplantation is significant for a given mouse strain.
+2: Next, separate models are fitted for BULS controls, BULS recipients, BUSNA controls, and BUSNA recipients to assess longitudinal changes in the phage community compared to wild donors. At the same time, Tukey post-hoc tests are performed.
+3: The results of these analyses are saved for the purpose of verbal summary and visualisation. 
+
+**definition of the sep_models() function**
+
+```{r warning=F, message=F,fig.width=12,fig.height=8}
+DISIM<-BOTH_BC
+library(lme4)
+library(lmerTest)
+
+sep_models<-function(DISIM){
+###################
+#separate datasets#
+###################
+BULS.DR<-DISIM[DISIM$Type=="Donor_Recipient"&
+                         DISIM$strain_locality=="BULS",]
+BUSNA.DR<-DISIM[DISIM$Type=="Donor_Recipient"&
+                         DISIM$strain_locality=="BUSNA",]
+BULS.DC<-DISIM[DISIM$Type=="Donor_Control"&
+                         DISIM$strain_locality=="BULS",]
+BUSNA.DC<-DISIM[DISIM$Type=="Donor_Control"&
+                         DISIM$strain_locality=="BUSNA",]
+##################
+#separate models##
+##################
+model_BULS.DR<-glmer(disim~day_of_experiment+
+                    (1|mouse_ID),BULS.DR,family = Gamma(link="log"))
+model_BUSNA.DR<-glmer(disim~day_of_experiment+
+                    (1|mouse_ID),BUSNA.DR,family = Gamma(link="log"))
+model_BULS.DC<-glmer(disim~day_of_experiment+
+                    (1|mouse_ID)+(1|donor),BULS.DC,family = Gamma(link="log"))
+model_BUSNA.DC<-glmer(disim~day_of_experiment+
+                    (1|mouse_ID)+(1|donor),BUSNA.DC,family = Gamma(link="log"))
+
+#####################
+#TESTING INTERACTION#
+#####################
+
+BUSNA.DF<-rbind(BUSNA.DC,BUSNA.DR)
+BULS.DF<-rbind(BULS.DC,BULS.DR)
+
+model_BUSNA.int<-glmer(disim~day_of_experiment*Type+
+                    (1|mouse_ID)+(1|donor),BUSNA.DF,family = Gamma(link="log"))
+model_BUSNA.int2<-glmer(disim~day_of_experiment+Type+
+                    (1|mouse_ID)+(1|donor),BUSNA.DF,family = Gamma(link="log"))
+ANOVA_int_BUSNA<-anova(model_BUSNA.int,model_BUSNA.int2)
+
+model_BULS.int<-glmer(disim~day_of_experiment*Type+
+                    (1|mouse_ID)+(1|donor),BULS.DF,family = Gamma(link="log"))
+model_BULS.int2<-glmer(disim~day_of_experiment+Type+
+                    (1|mouse_ID)+(1|donor),BULS.DF,family = Gamma(link="log"))
+ANOVA_int_BULS<-anova(model_BULS.int,model_BULS.int2)
+
+ANOVA_int_list<-list(ANOVA_int_BUSNA,ANOVA_int_BULS)
+names(ANOVA_int_list)<-c("ANOVA_int_BUSNA","ANOVA_int_BULS")
+
+P_int_BUSNA<-ANOVA_int_BUSNA$`Pr(>Chisq)`[2]
+P_int_BULS<-ANOVA_int_BULS$`Pr(>Chisq)`[2]
+
+P_int_BUSNA.tx<-ifelse(P_int_BUSNA<0.0001,"day x treatment: p < 0.0001", paste("day x treatment: p =", round(P_int_BUSNA,4)))
+P_int_BULS.tx<-ifelse(P_int_BULS<0.0001,"day x treatment: p < 0.0001", paste("day x treatment: p =", round(P_int_BULS,4)))
+P_int_tx<-list(P_int_BUSNA.tx,P_int_BULS.tx)
+names(P_int_tx)<-c("P_int_BUSNA.tx","P_int_BULS.tx")
+
+#################
+#separate ANOVAs#
+#################
+ANOVA_BULS.DR<-car::Anova(model_BULS.DR)
+ANOVA_BUSNA.DR<-car::Anova(model_BUSNA.DR)
+ANOVA_BULS.DC<-car::Anova(model_BULS.DC)
+ANOVA_BUSNA.DC<-car::Anova(model_BUSNA.DC)
+
+
+P_BULS.DR<-ANOVA_BULS.DR$`Pr(>Chisq)`
+P_BUSNA.DR<-ANOVA_BUSNA.DR$`Pr(>Chisq)`
+P_BULS.DC<-ANOVA_BULS.DC$`Pr(>Chisq)`
+P_BUSNA.DC<-ANOVA_BUSNA.DC$`Pr(>Chisq)`
+
+P_BULS.DR.tx<-ifelse(P_BULS.DR<0.0001,"Recipient: p < 0.0001",paste("Recipient: p =",round(P_BULS.DR,4)))
+P_BUSNA.DR.tx<-ifelse(P_BUSNA.DR<0.0001,"Recipient: p < 0.0001",paste("Recipient: p =",round(P_BUSNA.DR,4)))
+P_BULS.DC.tx<-ifelse(P_BULS.DC<0.0001,"Control: p < 0.0001",paste("Control: p =",round(P_BULS.DC,4)))
+P_BUSNA.DC.tx<-ifelse(P_BUSNA.DC<0.0001,"Control: p < 0.0001",paste("Control: p =",round(P_BUSNA.DC,4)))
+
+P_list<-list(P_BULS.DR.tx,P_BUSNA.DR.tx,P_BULS.DC.tx,P_BUSNA.DC.tx)
+names(P_list)<-c("P_BULS.DR.tx","P_BUSNA.DR.tx","P_BULS.DC.tx","P_BUSNA.DC.tx")
+
+####################
+#separate posthosc##
+####################
+
+TUKEY <- glht(model_BULS.DR,  mcp(day_of_experiment = "Tukey"))
+LETTERS<-cld(TUKEY)
+LETTERS.df<-data.frame(LETTERS=LETTERS$mcletters$Letters,
+                       day_of_experiment=names(LETTERS$mcletters$Letters))
+LETTERS.df_BULS.DR<-LETTERS.df
+
+TUKEY <- glht(model_BUSNA.DR,  mcp(day_of_experiment = "Tukey"))
+LETTERS<-cld(TUKEY)
+LETTERS.df<-data.frame(LETTERS=LETTERS$mcletters$Letters,
+                       day_of_experiment=names(LETTERS$mcletters$Letters))
+LETTERS.df_BUSNA.DR<-LETTERS.df
+
+TUKEY <- glht(model_BULS.DC,  mcp(day_of_experiment = "Tukey"))
+LETTERS<-cld(TUKEY)
+LETTERS.df<-data.frame(LETTERS=LETTERS$mcletters$Letters,
+                       day_of_experiment=names(LETTERS$mcletters$Letters))
+LETTERS.df_BULS.DC<-LETTERS.df
+
+TUKEY <- glht(model_BUSNA.DC,  mcp(day_of_experiment = "Tukey"))
+LETTERS<-cld(TUKEY)
+LETTERS.df<-data.frame(LETTERS=LETTERS$mcletters$Letters,
+                       day_of_experiment=names(LETTERS$mcletters$Letters))
+LETTERS.df_BUSNA.DC<-LETTERS.df
+
+# vymazat nesignifikantni hodnoty
+if(P_BULS.DR>0.05){LETTERS.df_BULS.DR$LETTERS<-""}
+if(P_BUSNA.DR>0.05){LETTERS.df_BUSNA.DR$LETTERS<-""}
+if(P_BULS.DC>0.05){LETTERS.df_BULS.DC$LETTERS<-""}
+if(P_BUSNA.DC>0.05){LETTERS.df_BUSNA.DC$LETTERS<-""}
+
+LETTERS_list<-list(LETTERS.df_BULS.DR,
+                   LETTERS.df_BUSNA.DR,
+                   LETTERS.df_BULS.DC,
+                   LETTERS.df_BUSNA.DC)
+names(LETTERS_list)<-c("BULS.DR","BUSNA.DR","BULS.DC","BUSNA.DC")
+
+RES_list<-list(LETTERS_list,P_list,ANOVA_int_list,P_int_tx)
+names(RES_list)<-c("LETTERS_list","P_list","ANOVA_int_list","P_int_tx")
+RES_list}
+
+```
+
+# Analyses for Bray-Curtis
+
+Analyses conducted using sep_models() function and graphical outcomes  
+
+```{r warning=F, message=F,fig.width=12,fig.height=8}
+#####################################
+####BRAY-CURTIS######################
+#####################################
+RESULTS<-sep_models(DISIM = BOTH_BC)
+P_list<-RESULTS$P_list
+LETTERS_list<-RESULTS$LETTERS_list
+RESULTS$ANOVA_int_list$ANOVA_int_BUSNA
+RESULTS$ANOVA_int_list$ANOVA_int_BULS
+
+
+#dataset pro grafy
+DF<-BOTH_BC
+BULS<-DF[DF$strain_locality=="BULS",]
+BUSNA<-DF[DF$strain_locality=="BUSNA",]
+
+#zakladni grafy (pro jednitlive kmeny)
+GG_BULS<-ggplot(BULS,aes(y=disim,x=day_of_experiment,aes(color=Type)))+
+  geom_boxplot(outlier.shape = NA,aes(color=Type))+
+  geom_point(position=position_dodge(width=0.75),aes(color=Type),alpha=0.5)+
+  facet_grid(.~strain_locality)
+
+GG_BUSNA<-ggplot(BUSNA,aes(y=disim,x=day_of_experiment,aes(color=Type)))+
+  geom_boxplot(outlier.shape = NA,aes(color=Type))+
+  geom_point(position=position_dodge(width=0.75),aes(color=Type),alpha=0.5)+
+  facet_grid(.~strain_locality)
+
+#pridat p hodnoty (posthoc)
+GG_BULS<-GG_BULS+annotate("text", label = toupper(LETTERS_list$BULS.DR$LETTERS),x = c(1,2,3)+0.25,y = 0.988,size = 2)
+GG_BULS<-GG_BULS+annotate("text", label = LETTERS_list$BULS.DC$LETTERS,x = c(1,2,3)-0.25,y = 0.988,size = 2)
+
+GG_BUSNA<-GG_BUSNA+annotate("text", label = toupper(LETTERS_list$BUSNA.DR$LETTERS),x = c(1,2,3)+0.25,y = 0.988,size = 2)
+GG_BUSNA<-GG_BUSNA+annotate("text", label = LETTERS_list$BUSNA.DC$LETTERS,x = c(1,2,3)-0.25,y = 0.988,size = 2)
+
+TEXT_BULS<-paste(RESULTS$P_int_tx$P_int_BULS.tx,
+                 P_list$P_BULS.DR.tx,
+                 P_list$P_BULS.DC.tx,
+                 sep="\n")
+
+TEXT_BUSNA<-paste(RESULTS$P_int_tx$P_int_BUSNA.tx,
+                 P_list$P_BUSNA.DR.tx,
+                 P_list$P_BUSNA.DC.tx,
+                 sep="\n")
+
+TEXT_BULS.BC<-TEXT_BULS
+TEXT_BUSNA.BC<-TEXT_BUSNA
+
+GG_BUSNA<-plot_adjust(GG_BUSNA)
+GG_BULS<-plot_adjust(GG_BULS)
+GRID<-ggarrange(GG_BUSNA,GG_BULS,ncol = 2,common.legend = T,legend = "bottom")
+
+GG_BUSNA_BC<-GG_BUSNA
+GG_BULS_BC<-GG_BULS
+GRID_BC<-GRID
+```
+
+
+# Analyses for Jaccard
+
+```{r warning=F, message=F,fig.width=12,fig.height=8}
+#####################################
+####JACCARD######################
+#####################################
+RESULTS<-sep_models(DISIM = BOTH_JA)
+P_list<-RESULTS$P_list
+LETTERS_list<-RESULTS$LETTERS_list
+RESULTS$ANOVA_int_list$ANOVA_int_BUSNA
+RESULTS$ANOVA_int_list$ANOVA_int_BULS
+
+#dataset pro grafy
+DF<-BOTH_JA
+BULS<-DF[DF$strain_locality=="BULS",]
+BUSNA<-DF[DF$strain_locality=="BUSNA",]
+
+#zakladni grafy (pro jednitlive kmeny)
+GG_BULS<-ggplot(BULS,aes(y=disim,x=day_of_experiment,aes(color=Type)))+
+  geom_boxplot(outlier.shape = NA,aes(color=Type))+
+  geom_point(position=position_dodge(width=0.75),aes(color=Type),alpha=0.5)+
+  facet_grid(.~strain_locality)
+
+GG_BUSNA<-ggplot(BUSNA,aes(y=disim,x=day_of_experiment,aes(color=Type)))+
+  geom_boxplot(outlier.shape = NA,aes(color=Type))+
+  geom_point(position=position_dodge(width=0.75),aes(color=Type),alpha=0.5)+
+  facet_grid(.~strain_locality)
+
+#pridat p hodnoty (posthoc)
+GG_BULS<-GG_BULS+annotate("text", label = toupper(LETTERS_list$BULS.DR$LETTERS),x = c(1,2,3)+0.25,y = 0.82,size = 2.5)
+GG_BULS<-GG_BULS+annotate("text", label = LETTERS_list$BULS.DC$LETTERS,x = c(1,2,3)-0.25,y = 0.82,size = 2.5)
+
+GG_BUSNA<-GG_BUSNA+annotate("text", label = toupper(LETTERS_list$BUSNA.DR$LETTERS),x = c(1,2,3)+0.25,y = 0.85,size = 2.5)
+GG_BUSNA<-GG_BUSNA+annotate("text", label = LETTERS_list$BUSNA.DC$LETTERS,x = c(1,2,3)-0.25,y = 0.85,size = 2.5)
+
+
+TEXT_BULS<-paste(RESULTS$P_int_tx$P_int_BULS.tx,
+                 P_list$P_BULS.DR.tx,
+                 P_list$P_BULS.DC.tx,
+                 sep="\n")
+
+TEXT_BUSNA<-paste(RESULTS$P_int_tx$P_int_BUSNA.tx,
+                 P_list$P_BUSNA.DR.tx,
+                 P_list$P_BUSNA.DC.tx,
+                 sep="\n")
+
+TEXT_BULS.JA<-TEXT_BULS
+TEXT_BUSNA.JA<-TEXT_BUSNA
+
+#spolecny graf
+GG_BUSNA<-plot_adjust(GG_BUSNA)
+GG_BULS<-plot_adjust(GG_BULS)
+GRID<-ggarrange(GG_BUSNA,GG_BULS,ncol = 2,common.legend = T,legend = "bottom")
+
+GG_BUSNA_JA<-GG_BUSNA
+GG_BULS_JA<-GG_BULS
+GRID_JA<-GRID
+```
+
+
+# Analyses for Jexact
+
+```{r warning=F, message=F,fig.width=12,fig.height=8}
+
+#######################################
+####separate_scaffolds_Jexact_distance#
+#######################################
+RESULTS<-sep_models(DISIM = BOTH_separate_scaffolds_Jexact_distance)
+P_list<-RESULTS$P_list
+LETTERS_list<-RESULTS$LETTERS_list
+RESULTS$ANOVA_int_list$ANOVA_int_BUSNA
+RESULTS$ANOVA_int_list$ANOVA_int_BULS
+
+#dataset pro grafy
+DF<-BOTH_separate_scaffolds_Jexact_distance
+BULS<-DF[DF$strain_locality=="BULS",]
+BUSNA<-DF[DF$strain_locality=="BUSNA",]
+
+#zakladni grafy (pro jednitlive kmeny)
+GG_BULS<-ggplot(BULS,aes(y=disim,x=day_of_experiment,aes(color=Type)))+
+  geom_boxplot(outlier.shape = NA,aes(color=Type))+
+  geom_point(position=position_dodge(width=0.75),aes(color=Type),alpha=0.5)+
+  facet_grid(.~strain_locality)
+
+GG_BUSNA<-ggplot(BUSNA,aes(y=disim,x=day_of_experiment,aes(color=Type)))+
+  geom_boxplot(outlier.shape = NA,aes(color=Type))+
+  geom_point(position=position_dodge(width=0.75),aes(color=Type),alpha=0.5)+
+  facet_grid(.~strain_locality)
+
+#pridat p hodnoty (posthoc)
+GG_BULS<-GG_BULS+annotate("text", label = toupper(LETTERS_list$BULS.DR$LETTERS),x = c(1,2,3)+0.25,y = 0.18,size = 2.5)
+GG_BULS<-GG_BULS+annotate("text", label = LETTERS_list$BULS.DC$LETTERS,x = c(1,2,3)-0.25,y = 0.18,size = 2.5)
+
+GG_BUSNA<-GG_BUSNA+annotate("text", label = toupper(LETTERS_list$BUSNA.DR$LETTERS),x = c(1,2,3)+0.25,y = 0.19,size = 2.5)
+GG_BUSNA<-GG_BUSNA+annotate("text", label = LETTERS_list$BUSNA.DC$LETTERS,x = c(1,2,3)-0.25,y = 0.19,size = 2.5)
+
+
+TEXT_BULS<-paste(RESULTS$P_int_tx$P_int_BULS.tx,
+                 P_list$P_BULS.DR.tx,
+                 P_list$P_BULS.DC.tx,
+                 sep="\n")
+
+TEXT_BUSNA<-paste(RESULTS$P_int_tx$P_int_BUSNA.tx,
+                 P_list$P_BUSNA.DR.tx,
+                 P_list$P_BUSNA.DC.tx,
+                 sep="\n")
+
+TEXT_BULS.separate_scaffolds_Jexact_distance<-TEXT_BULS
+TEXT_BUSNA.separate_scaffolds_Jexact_distance<-TEXT_BUSNA
+
+#spolecny graf
+GG_BUSNA<-plot_adjust(GG_BUSNA)
+GG_BULS<-plot_adjust(GG_BULS)
+GRID<-ggarrange(GG_BUSNA,GG_BULS,ncol = 2,common.legend = T,legend = "bottom")
+
+GG_BUSNA_separate_scaffolds_Jexact_distance<-GG_BUSNA
+GG_BULS_separate_scaffolds_Jexact_distance<-GG_BULS
+GRID_separate_scaffolds_Jexact_distance<-GRID
+```
+
+# Analyses for probWJ
+
+```{r warning=F, message=F,fig.width=12,fig.height=8}
+
+#######################################
+####separate_reads_probWJ_distance#####
+#######################################
+RESULTS<-sep_models(DISIM = BOTH_separate_reads_probWJ_distance)
+P_list<-RESULTS$P_list
+LETTERS_list<-RESULTS$LETTERS_list
+RESULTS$ANOVA_int_list$ANOVA_int_BUSNA
+RESULTS$ANOVA_int_list$ANOVA_int_BULS
+
+#dataset pro grafy
+DF<-BOTH_separate_reads_probWJ_distance
+BULS<-DF[DF$strain_locality=="BULS",]
+BUSNA<-DF[DF$strain_locality=="BUSNA",]
+
+#zakladni grafy (pro jednitlive kmeny)
+GG_BULS<-ggplot(BULS,aes(y=disim,x=day_of_experiment,aes(color=Type)))+
+  geom_boxplot(outlier.shape = NA,aes(color=Type))+
+  geom_point(position=position_dodge(width=0.75),aes(color=Type),alpha=0.5)+
+  facet_grid(.~strain_locality)
+
+GG_BUSNA<-ggplot(BUSNA,aes(y=disim,x=day_of_experiment,aes(color=Type)))+
+  geom_boxplot(outlier.shape = NA,aes(color=Type))+
+  geom_point(position=position_dodge(width=0.75),aes(color=Type),alpha=0.5)+
+  facet_grid(.~strain_locality)
+
+#pridat p hodnoty (posthoc)
+GG_BULS<-GG_BULS+annotate("text", label = toupper(LETTERS_list$BULS.DR$LETTERS),x = c(1,2,3)+0.25,y = 0.38,size = 2.5)
+GG_BULS<-GG_BULS+annotate("text", label = LETTERS_list$BULS.DC$LETTERS,x = c(1,2,3)-0.25,y = 0.38,size = 2.5)
+
+GG_BUSNA<-GG_BUSNA+annotate("text", label = toupper(LETTERS_list$BUSNA.DR$LETTERS),x = c(1,2,3)+0.25,y = 0.31,size = 2.5)
+GG_BUSNA<-GG_BUSNA+annotate("text", label = LETTERS_list$BUSNA.DC$LETTERS,x = c(1,2,3)-0.25,y = 0.31,size = 2.5)
+
+TEXT_BULS<-paste(RESULTS$P_int_tx$P_int_BULS.tx,
+                 P_list$P_BULS.DR.tx,
+                 P_list$P_BULS.DC.tx,
+                 sep="\n")
+
+TEXT_BUSNA<-paste(RESULTS$P_int_tx$P_int_BUSNA.tx,
+                 P_list$P_BUSNA.DR.tx,
+                 P_list$P_BUSNA.DC.tx,
+                 sep="\n")
+
+TEXT_BULS.separate_reads_probWJ_distance<-TEXT_BULS
+TEXT_BUSNA.separate_reads_probWJ_distance<-TEXT_BUSNA
+
+#spolecny graf
+GG_BUSNA<-plot_adjust(GG_BUSNA)
+GG_BULS<-plot_adjust(GG_BULS)
+GRID<-ggarrange(GG_BUSNA,GG_BULS,ncol = 2,common.legend = T,legend = "bottom")
+
+GG_BUSNA_separate_reads_probWJ_distance<-GG_BUSNA
+GG_BULS_separate_reads_probWJ_distance<-GG_BULS
+GRID_separate_reads_probWJ_distance<-GRID
+```
+
+
+# Joint plot for all types of dissimilarites 
+
+```{r warning=F, message=F,fig.width=12,fig.height=15}
+
+ggstyle<-function(x){
+   x+theme(axis.title.y = element_blank(),
+           axis.title.x = element_blank(),
+           legend.position = "none")
+}
+
+GG_BUSNA_BC.s<-ggstyle(GG_BUSNA_BC)
+GG_BULS_BC.s<-ggstyle(GG_BULS_BC)
+GG_BUSNA_JA.s<-ggstyle(GG_BUSNA_JA)
+GG_BULS_JA.s<-ggstyle(GG_BULS_JA)
+GG_BUSNA_separate_reads_probWJ_distance.s<-ggstyle(GG_BUSNA_separate_reads_probWJ_distance)
+GG_BULS_separate_reads_probWJ_distance.s<-ggstyle(GG_BULS_separate_reads_probWJ_distance)
+GG_BUSNA_separate_scaffolds_Jexact_distance.s<-ggstyle(GG_BUSNA_separate_scaffolds_Jexact_distance)
+GG_BULS_separate_scaffolds_Jexact_distance.s<-ggstyle(GG_BULS_separate_scaffolds_Jexact_distance)
+
+#stat tests
+TEXT_BUSNA.separate_reads_probWJ_distance<-gsub("p = 4e-04","p = 0.0004",TEXT_BUSNA.separate_reads_probWJ_distance)
+TEXT_BULS.separate_scaffolds_Jexact_distance<-gsub("p = 2e-04","p = 0.0002",TEXT_BULS.separate_scaffolds_Jexact_distance)
+TEXT_BULS.separate_scaffolds_Jexact_distance<-gsub("p = 6e-04","p = 0.0006",TEXT_BULS.separate_scaffolds_Jexact_distance)
+
+library(cowplot)
+GG_BUSNA_BC.s.t<-ggdraw(add_sub(GG_BUSNA_BC.s, TEXT_BUSNA.BC,size=7,hjust = 0,x=0))
+GG_BULS_BC.s.t<-ggdraw(add_sub(GG_BULS_BC.s, TEXT_BULS.BC,size=7,hjust = 0,x=0))
+GG_BUSNA_JA.s.t<-ggdraw(add_sub(GG_BUSNA_JA.s, TEXT_BUSNA.JA,size=7,hjust = 0,x=0))
+GG_BULS_JA.s.t<-ggdraw(add_sub(GG_BULS_JA.s, TEXT_BULS.JA,size=7,hjust = 0,x=0))
+GG_BUSNA_separate_reads_probWJ_distance.s.t<-ggdraw(add_sub(GG_BUSNA_separate_reads_probWJ_distance.s,
+                                                            TEXT_BUSNA.separate_reads_probWJ_distance,size=7,hjust = 0,x=0))
+GG_BULS_separate_reads_probWJ_distance.s.t<-ggdraw(add_sub(GG_BULS_separate_reads_probWJ_distance.s, 
+                                                           TEXT_BULS.separate_reads_probWJ_distance,size=7,hjust = 0,x=0))
+GG_BUSNA_separate_scaffolds_Jexact_distance.s.t<-ggdraw(add_sub(GG_BUSNA_separate_scaffolds_Jexact_distance.s, TEXT_BUSNA.separate_scaffolds_Jexact_distance,
+                                                                size=7,hjust = 0,x=0))
+GG_BULS_separate_scaffolds_Jexact_distance.s.t<-ggdraw(add_sub(GG_BULS_separate_scaffolds_Jexact_distance.s, TEXT_BULS.separate_scaffolds_Jexact_distance,
+                                                               size=7,hjust = 0,x=0))
+
+########### Bray-Curtis##############
+text <- "A) Bray-Curtis"
+tgrob <- text_grob(text,size = 8,face = "bold",hjust = 0)
+plot_0 <- as_ggplot(tgrob) + theme(plot.margin = margin(0,0,0,0, "cm"))
+G1<-ggarrange(plot_0,NULL,ncol = 2,widths = c(1,5))
+G2<-ggarrange(GG_BUSNA_BC.s.t,
+              GG_BULS_BC.s.t,
+              ncol = 2,
+              common.legend = T,legend = "none")
+GRID12<-ggarrange(G1,G2,nrow = 2,heights = c(1,20),
+                   common.legend = T,legend = "none")
+
+GRID_BC<-GRID12
+
+########### Bray-Curtis##############
+text <- "B) Jaccard"
+tgrob <- text_grob(text,size = 8,face = "bold",hjust = 0)
+plot_0 <- as_ggplot(tgrob) + theme(plot.margin = margin(0,0,0,0, "cm"))
+G1<-ggarrange(plot_0,NULL,ncol = 2,widths = c(1,5))
+G2<-ggarrange(GG_BUSNA_JA.s.t,
+              GG_BULS_JA.s.t,
+              ncol = 2,
+              common.legend = T,legend = "none")
+GRID12<-ggarrange(G1,G2,nrow = 2,heights = c(1,20),
+                   common.legend = T,legend = "none")
+
+GRID_JA<-GRID12
+
+########### _separate_reads_probWJ_distance##############
+text <- "C) probWJ"
+tgrob <- text_grob(text,size = 8,face = "bold",hjust = 0)
+plot_0 <- as_ggplot(tgrob) + theme(plot.margin = margin(0,0,0,0, "cm"))
+G1<-ggarrange(plot_0,NULL,ncol = 2,widths = c(1,5))
+G2<-ggarrange(GG_BUSNA_separate_reads_probWJ_distance.s.t,
+              GG_BULS_separate_reads_probWJ_distance.s.t,
+              ncol = 2,
+              common.legend = T,legend = "none")
+GRID12<-ggarrange(G1,G2,nrow = 2,heights = c(1,20),
+                   common.legend = T,legend = "none")
+
+GRID_probWJ<-GRID12
+
+########### _separate_scaffolds_Jexact_distance##############
+text <- "D) Jexact"
+tgrob <- text_grob(text,size = 8,face = "bold",hjust = 0)
+plot_0 <- as_ggplot(tgrob) + theme(plot.margin = margin(0,0,0,0, "cm"))
+G1<-ggarrange(plot_0,NULL,ncol = 2,widths = c(1,5))
+G2<-ggarrange(GG_BUSNA_separate_scaffolds_Jexact_distance.s.t,
+              GG_BULS_separate_scaffolds_Jexact_distance.s.t,
+              ncol = 2,
+              common.legend = T,legend = "none")
+GRID12<-ggarrange(G1,G2,nrow = 2,heights = c(1,20),
+                   common.legend = T,legend = "none")
+GRID_Jexact<-GRID12
+
+GRID_All<-
+ggarrange(GRID_BC,
+          GRID_JA,
+          GRID_probWJ,
+          GRID_Jexact,
+          ncol = 2, nrow = 2,common.legend = T)
+
+```
+
+
+
+```{r}
+#axis titles####
+text <- "Dissimilarity"
+tgrob <- text_grob(text,size = 10,hjust = 0.5,rot=90)
+plot_y <- as_ggplot(tgrob) + theme(plot.margin = margin(0,0,0,0, "cm"))
+
+text <- "Day of experiment"
+tgrob <- text_grob(text,size = 10,hjust = 0.5,vjust = 0)
+plot_x <- as_ggplot(tgrob) + theme(plot.margin = margin(0,0,0,0, "cm"))
+
+#legend
+LEGEND <- cowplot::get_legend(GG_BULS_separate_scaffolds_Jexact_distance)
+# grid.newpage()
+# grid.draw(legend)
+
+GRID_All2<-ggarrange(plot_y,GRID_All,ncol = 2,widths = c(1,20))
+
+BOTTOM<-ggarrange(NULL,plot_x,LEGEND,ncol = 3)
+GRID_All3<-ggarrange(GRID_All2,BOTTOM,nrow = 2,heights = c(20,3))
+GRID_All3
+
+ggsave(GRID_All3,filename = "/media/kreising/DATA/data/BF_mysi/RESULTS_10.6.2024/Did_2_donor.pdf",
+       width = 18,height = 15,units = "cm")
+```
+
+# Temporal stability
+
+Analyses of temporal stability are carried out with the temporal_stability() function. This function works with community dissimilarities between two time points. Dissimilarity values between different mouse strains are excluded. Then the dissimilarity values within individuals and between individuals are determined, their average values calculated and compared with the function two.boot(). These analyses are performed for all types of dissimilarity indices.
+
+
+
+```{r}
+library(reshape2)
+library(simpleboot)
+#sample data
+SD<-sample_data(PHYLOSEQ.prop.sub)
+class(SD)<-"data.frame"
+
+# dim(JA.kmer)
+DISSIM=DIST_list[[6]]  #dissimilarity matrix
+sample.data=SD #sample data
+exclude.na=T #exclude NS
+exclude.same="day_of_experiment" #exclude dissimilarities - same level
+exclude.different="strain_locality" #exclude dissimilarities - different level
+intervals=c("D7","D2") #intervals that will be compared
+interval.var=c("day_of_experiment") #vaeiable coding intervals
+within_between="mouse_ID" #variable distinguishing within between
+
+temporal_stability<-function(DISSIM,sample.data,exclude.na=T,exclude.same,
+                             exclude.different,intervals,interval.var,within_between){            
+   #Dissimilarity mat. in long format
+   MAT<-as.matrix(DISSIM)
+   SD1<-sample.data
+   SD2<-sample.data
+   FILTER<-rownames(MAT)%in%rownames(sample.data)
+   MAT<-MAT[FILTER,FILTER]
+     
+   MAT[upper.tri(MAT,diag = T)]<-NA
+   MAT.long<-melt(MAT)
+
+   SD1$Var1<-rownames(sample.data)
+   SD2$Var2<-rownames(sample.data)
+   MAT.long.1<-join(MAT.long,SD1)
+   MAT.long.2<-join(MAT.long,SD2)
+
+
+#Exclude NA
+if(exclude.na==T){MAT.long.1=MAT.long.1[!is.na(MAT.long.1$value),]
+                  MAT.long.2=MAT.long.2[!is.na(MAT.long.2$value),]}
+
+# exclude.same filtering
+if(length(exclude.same)>0){FILTER=MAT.long.1[,exclude.same]!=MAT.long.2[,exclude.same]
+                           MAT.long.1=MAT.long.1[FILTER,]
+                           MAT.long.2=MAT.long.2[FILTER,]}
+
+# exclude.same filtering
+if(length(exclude.different)>0){FILTER=MAT.long.1[,exclude.different]==MAT.long.2[,exclude.different]
+                           MAT.long.1=MAT.long.1[FILTER,]
+                           MAT.long.2=MAT.long.2[FILTER,]}
+#subset interval
+# exclude.same filtering
+if(length(interval.var)>0){FILTER=as.logical()
+                           for(k in 1:dim(MAT.long.1)[1]){
+                             FILTER[k]=sum(intervals%in%c(MAT.long.1[k,interval.var],MAT.long.2[k,interval.var]))==2
+                           }
+                           MAT.long.1=MAT.long.1[FILTER,]
+                           MAT.long.2=MAT.long.2[FILTER,]}
+
+MAT.long.1$value.scaled<-scale(MAT.long.1$value)
+MAT.long.2$value.scaled<-scale(MAT.long.2$value)
+
+WITHIN<-MAT.long.1$value.scaled[MAT.long.1[,within_between]==MAT.long.2[,within_between]]
+BETWEEN<-MAT.long.2$value.scaled[MAT.long.1[,within_between]!=MAT.long.2[,within_between]]
+
+   bootstrapped <- two.boot(BETWEEN,WITHIN,  mean, 1000)
+   bootstrapped
+}
+
+#Stabilita mezi D-1 a D2
+TS_D1_02<-temporal_stability(DISSIM=DIST_list[[1]],sample.data=SD,exclude.na=T,exclude.same="day_of_experiment",
+                   exclude.different="strain_locality",intervals=c("D-1","D2"),
+                   interval.var=c("day_of_experiment"),within_between="mouse_ID")
+
+TS_D2_02<-temporal_stability(DISSIM=DIST_list[[2]],sample.data=SD,exclude.na=T,exclude.same="day_of_experiment",
+                   exclude.different="strain_locality",intervals=c("D-1","D2"),
+                   interval.var=c("day_of_experiment"),within_between="mouse_ID")
+
+TS_D3_02<-temporal_stability(DISSIM=DIST_list[[3]],sample.data=SD,exclude.na=T,exclude.same="day_of_experiment",
+                   exclude.different="strain_locality",intervals=c("D-1","D2"),
+                   interval.var=c("day_of_experiment"),within_between="mouse_ID")
+
+TS_D4_02<-temporal_stability(DISSIM=DIST_list[[4]],sample.data=SD,exclude.na=T,exclude.same="day_of_experiment",
+                   exclude.different="strain_locality",intervals=c("D-1","D2"),
+                   interval.var=c("day_of_experiment"),within_between="mouse_ID")
+
+TS_D5_02<-temporal_stability(DISSIM=DIST_list[[5]],sample.data=SD,exclude.na=T,exclude.same="day_of_experiment",
+                   exclude.different="strain_locality",intervals=c("D-1","D2"),
+                   interval.var=c("day_of_experiment"),within_between="mouse_ID")
+
+TS_D6_02<-temporal_stability(DISSIM=DIST_list[[6]],sample.data=SD,exclude.na=T,exclude.same="day_of_experiment",
+                   exclude.different="strain_locality",intervals=c("D-1","D2"),
+                   interval.var=c("day_of_experiment"),within_between="mouse_ID")
+
+TS_D7_02<-temporal_stability(DISSIM=DIST_list[[7]],sample.data=SD,exclude.na=T,exclude.same="day_of_experiment",
+                   exclude.different="strain_locality",intervals=c("D-1","D2"),
+                   interval.var=c("day_of_experiment"),within_between="mouse_ID")
+
+
+#Stabilita mezi D2 a D7
+TS_D1_27<-temporal_stability(DISSIM=DIST_list[[1]],sample.data=SD,exclude.na=T,exclude.same="day_of_experiment",
+                   exclude.different="strain_locality",intervals=c("D7","D2"),
+                   interval.var=c("day_of_experiment"),within_between="mouse_ID")
+
+TS_D2_27<-temporal_stability(DISSIM=DIST_list[[2]],sample.data=SD,exclude.na=T,exclude.same="day_of_experiment",
+                   exclude.different="strain_locality",intervals=c("D7","D2"),
+                   interval.var=c("day_of_experiment"),within_between="mouse_ID")
+
+TS_D3_27<-temporal_stability(DISSIM=DIST_list[[3]],sample.data=SD,exclude.na=T,exclude.same="day_of_experiment",
+                   exclude.different="strain_locality",intervals=c("D7","D2"),
+                   interval.var=c("day_of_experiment"),within_between="mouse_ID")
+
+TS_D4_27<-temporal_stability(DISSIM=DIST_list[[4]],sample.data=SD,exclude.na=T,exclude.same="day_of_experiment",
+                   exclude.different="strain_locality",intervals=c("D7","D2"),
+                   interval.var=c("day_of_experiment"),within_between="mouse_ID")
+
+TS_D5_27<-temporal_stability(DISSIM=DIST_list[[5]],sample.data=SD,exclude.na=T,exclude.same="day_of_experiment",
+                   exclude.different="strain_locality",intervals=c("D7","D2"),
+                   interval.var=c("day_of_experiment"),within_between="mouse_ID")
+
+TS_D6_27<-temporal_stability(DISSIM=DIST_list[[6]],sample.data=SD,exclude.na=T,exclude.same="day_of_experiment",
+                   exclude.different="strain_locality",intervals=c("D7","D2"),
+                   interval.var=c("day_of_experiment"),within_between="mouse_ID")
+
+TS_D7_27<-temporal_stability(DISSIM=DIST_list[[7]],sample.data=SD,exclude.na=T,exclude.same="day_of_experiment",
+                   exclude.different="strain_locality",intervals=c("D7","D2"),
+                   interval.var=c("day_of_experiment"),within_between="mouse_ID")
+
+
+Mean=c(TS_D1_02$t0,TS_D1_27$t0,
+       TS_D2_02$t0,TS_D2_27$t0,
+       TS_D3_02$t0,TS_D3_27$t0,
+       TS_D4_02$t0,TS_D4_27$t0,
+       TS_D5_02$t0,TS_D5_27$t0,
+       TS_D6_02$t0,TS_D6_27$t0,
+       TS_D7_02$t0,TS_D7_27$t0)
+
+Lci=c(quantile(TS_D1_02$t,0.025),quantile(TS_D1_27$t,0.025),
+       quantile(TS_D2_02$t,0.025),quantile(TS_D2_27$t,0.025),
+       quantile(TS_D3_02$t,0.025),quantile(TS_D3_27$t,0.025),
+       quantile(TS_D4_02$t,0.025),quantile(TS_D4_27$t,0.025),
+       quantile(TS_D5_02$t,0.025),quantile(TS_D5_27$t,0.025),
+       quantile(TS_D6_02$t,0.025),quantile(TS_D6_27$t,0.025),
+       quantile(TS_D7_02$t,0.025),quantile(TS_D7_27$t,0.025))
+
+Hci=c(quantile(TS_D1_02$t,0.975),quantile(TS_D1_27$t,0.975),
+       quantile(TS_D2_02$t,0.975),quantile(TS_D2_27$t,0.975),
+       quantile(TS_D3_02$t,0.975),quantile(TS_D3_27$t,0.975),
+       quantile(TS_D4_02$t,0.975),quantile(TS_D4_27$t,0.975),
+       quantile(TS_D5_02$t,0.975),quantile(TS_D5_27$t,0.975),
+       quantile(TS_D6_02$t,0.975),quantile(TS_D6_27$t,0.975),
+       quantile(TS_D7_02$t,0.975),quantile(TS_D7_27$t,0.975))
+
+Type=rep(names(DIST_list),each=2)
+
+Interval=rep(c("day -1 ~ 2","day 2 ~7"),7)
+
+#####
+DF<-data.frame(Mean,Lci,Hci,Type,Interval)
+
+write.table(DF, file = "/media/kreising/DATA/data/BF_mysi/RESULTS_15.3.2022/BP_stability.txt",
+            sep="\t",quote = F,row.names = F)
+
+GG<-ggplot(DF,aes(x=Interval,y=Mean))+
+           geom_bar(stat="identity",fill ="gray60")+facet_grid(~Type,)+
+           geom_segment(aes(xend=Interval, y=Lci, yend=Hci), size=0.5,
+                        arrow=arrow(ends="both", length=unit(0.1, "inches"), angle=90))+
+  theme_bw()
+GG 
+
+```
+
+
+#Phage trasmission
+
+We first identified phages that were present in the wild population, were not present in the controls at any time, were not present in the recipients before transplantation, but were present after transplantation. Next, we used premutations (i.e. resampling of the potentially transmitted contigs across the population of donors) to test whether these contigs were present more frequently than expected by chance in pairs of recipients and actual donors. 
+
+
+```{r}
+FILTER<-!sample_data(PHYLOSEQ.allF)$experimental_group%in%c("na")
+PHYLOSEQ.prop.filt<-prune_samples(FILTER,PHYLOSEQ.allF)
+SD<-sample_data(PHYLOSEQ.prop.filt)
+SD$TEST<-paste(SD$experimental_group,SD$day_of_experiment)
+TEST.DF<-t(apply(otu_table(PHYLOSEQ.prop.filt),1,function(x) tapply(x,SD$TEST,mean)))
+TEST.DF<-data.frame(TEST.DF)
+
+#Absent in control
+FILTER1<-rowSums(TEST.DF[,grep("control",colnames(TEST.DF))])==0
+sum(FILTER1)
+
+#Absetn in recipients prior infection
+FILTER2<-(TEST.DF[,grep("recipient.D.1",colnames(TEST.DF))])==0
+sum(FILTER2)
+
+#present in wild
+FILTER3<-(TEST.DF[,grep("donor.D0",colnames(TEST.DF))])>0
+sum(FILTER3)
+
+#present in recipinets after transplantation
+FILTER4<-rowSums(TEST.DF[,grep("recipient",colnames(TEST.DF))])>0
+sum(FILTER4)
+
+FILTER<-FILTER1+FILTER2+FILTER3+FILTER4==4
+sum(FILTER)
+TRANSMITTED_question_mark<-prune_taxa(FILTER,PHYLOSEQ.allF)
+sample_data(TRANSMITTED_question_mark)$TEST<-paste(sample_data(TRANSMITTED_question_mark)$experimental_group,
+                                                   sample_data(TRANSMITTED_question_mark)$day_of_experiment)
+
+KEEP<-c("recipient D2","recipient D7","donor D0")
+TRANSMITTED_question_mark<-prune_samples(sample_data(TRANSMITTED_question_mark)$TEST%in%KEEP,
+                                         TRANSMITTED_question_mark)
+
+
+#
+i<-1
+j<-1
+SD<-sample_data(TRANSMITTED_question_mark)
+OTU_TABLE<-otu_table(TRANSMITTED_question_mark)
+RESULTS.list<-list()
+nperm<-1000
+
+i<-1
+for(i in 1:ntaxa(TRANSMITTED_question_mark)){
+   OTU<-as.numeric(OTU_TABLE[i,])
+   TAPPLY<-tapply(OTU,SD$mouse_ID,sum)
+   TAPPLY_positive<-TAPPLY[TAPPLY>0]
+   POSITVE_INFECTED<-names(TAPPLY_positive)[-grep("INF",names(TAPPLY_positive))]
+   POSITVE_DONORS<-names(TAPPLY_positive)[grep("INF",names(TAPPLY_positive))]
+
+   RESULTS<-as.logical()
+   RESULTS.rand.SUM<-as.numeric()
+   
+   for(j in 1:length(POSITVE_INFECTED)){
+      SD.SUB<-SD[SD$mouse_ID==POSITVE_INFECTED[j]]
+      RESULTS[j]<-SD.SUB$donor_identity[1]%in%POSITVE_DONORS
+      
+      RESULTS.rand<-as.logical()   
+      for(k in 1:nperm){ #nahodne vybrani donori odpovidajiciho poctu
+           DONORS_all<-names(TAPPLY)[grep("INF",names(TAPPLY))]
+           POSITVE_DONORS.rand<-sample(DONORS_all)[1:length(POSITVE_DONORS)]
+           SD.SUB<-SD[SD$mouse_ID==POSITVE_INFECTED[j]]
+           RESULTS.rand[k]<-SD.SUB$donor_identity[1]%in%POSITVE_DONORS.rand
+      }
+      
+      RESULTS.rand.SUM[j]<-sum(RESULTS.rand)
+   }
+
+
+   RESULTS.DF<-data.frame(OTU=taxa_names(TRANSMITTED_question_mark)[i],
+                          POSITVE_INFECTED,RESULTS,RESULTS.rand.SUM,
+                          nperm)
+
+   RESULTS.list[[i]]<-RESULTS.DF
+}
+
+
+ALL_OTUS<-do.call('rbind', RESULTS.list)
+# summary(ALL_OTUS)
+write.table(ALL_OTUS,file = "/media/kreising/DATA/data/BF_mysi/RESULTS_15.3.2022/Transmitted_BF.txt",
+            row.names = F,quote = F,sep = "\t")
+
+sum(ALL_OTUS$RESULTS)/length(ALL_OTUS$nperm) #pozorovany
+sum(ALL_OTUS$RESULTS.rand.SUM)/sum(ALL_OTUS$nperm) #permutovany
+
+
+ALL_OTUS$RESULTS01<-ifelse(ALL_OTUS$RESULTS==F,0,1)
+ALL_OTUS$RESULTS.rand.prop<-ALL_OTUS$RESULTS.rand.SUM/ALL_OTUS$nperm
+
+wilcox.test(ALL_OTUS$RESULTS01,ALL_OTUS$RESULTS.rand.prop,paired = T)
+t.test(ALL_OTUS$RESULTS01,ALL_OTUS$RESULTS.rand.prop,paired = T)
+
+```
+

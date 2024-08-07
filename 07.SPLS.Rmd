@@ -1,0 +1,511 @@
+---
+title: "GM x BP spls"
+author: "Jakub Kreisinger"
+date: "September 16, 2021"
+output: html_document
+---
+
+
+# Pacakges and functions
+
+```{r }
+library(phyloseq)
+library(mixOmics)
+library(vegan)
+library(LDM)
+library(ccrepe)
+library(glmmTMB)
+
+c25 <- c("dodgerblue2","#E31A1C", # red
+         "green4",
+         "#6A3D9A", # purple
+         "#FF7F00", # orange
+         "black","gold1",
+         "skyblue2","#FB9A99", # lt pink
+         "palegreen2",
+         "#CAB2D6", # lt purple
+         "#FDBF6F", # lt orange
+          "khaki2",
+         "maroon","orchid1","deeppink1","blue1","steelblue4",
+         "darkturquoise","green1","yellow4","yellow3",
+         "darkorange4","brown","gray70")
+
+EXTRACT_AIC<-function(x){
+  AIC.vect<-as.numeric() 
+  for(i in 1:length(x)){
+      SUMMARY<-try(summary(x[[i]]))
+      if(class(SUMMARY)=="summary.glmmTMB"){AIC.vect[i]<-(SUMMARY$AICtab[1])
+      }else{AIC.vect[i]<-NA}
+   }
+  AIC.vect
+}
+
+EXTRACT_SUMMARY<-function(x){
+   SUMMARY.list<-list()
+   for(i in 1:length(x)){
+       SUMMARY<-try(summary(x[[i]]))
+       COEF<-try(SUMMARY$coefficients$cond)
+       if(class(COEF)!="try-error"){SUMMARY.list[[i]]<-COEF
+       } else {SUMMARY.list[[i]]=matrix(rep(NA,8),nrow = 2)}
+    }
+    SUMMARY.list
+}
+
+
+manage_unassigned<-function(PHYLOSEQ,UNASS_STRING=NA,ADD,AFTER=TRUE){
+   TAXall<-data.frame(tax_table(PHYLOSEQ),stringsAsFactors = F)
+   if(!is.na(UNASS_STRING)){TAXall[UNASS_STRING]<-NA}
+   # TAXall<-as.character(TAXall[i,])
+   for(i in 1:dim(TAXall)[1]){  
+       TAX<-as.character(TAXall[i,])
+       if(AFTER==TRUE) {for(j in 2: length(TAX)){
+                            if(is.na(TAX[j])){TAX[j]<-ifelse(regexpr(ADD,TAX[j-1])>0,
+                                           TAX[j-1],paste(TAX[j-1],ADD,sep=""))}}}
+      if(AFTER==FALSE) {for(j in 2: length(TAX)){
+                            if(is.na(TAX[j])){TAX[j]<-ifelse(regexpr(ADD,TAX[j-1])>0,
+                                     TAX[j-1],ADD,paste(TAX[j-1],sep=""))}}}
+      TAXall[i,]<-TAX
+    }
+   TAXA<-colnames(TAXall)
+   SPECIES<-rownames(TAXall)
+   TAXall<-tax_table(TAXall)
+   taxa_names(TAXall)<-SPECIES
+   colnames(TAXall)<-TAXA
+   tax_table(PHYLOSEQ)<-TAXall
+  
+   #output
+   PHYLOSEQ
+}
+```
+
+# Load + prepare data
+```{r}
+
+#load bacterial data
+load("/media/kreising/DATA/data/BF_mysi/data/PHYLOSEQ_merged.gm_NewMeta.R")
+PHYLOSEQ_merged.gm<-PHYLOSEQ_merged.gm_NewMeta
+taxa_names(PHYLOSEQ_merged.gm)<-paste("OTU",1:ntaxa(PHYLOSEQ_merged.gm),sep="_")
+#load phage data
+load("/media/kreising/DATA/data/BF_mysi/data/PHYLOSEQ.prop.BP_100322.R")
+
+#rename samples 
+sample_names(PHYLOSEQ.prop.BP)<-sample_data(PHYLOSEQ.prop.BP)$seq_correct_label
+
+#remove samples that are not present in both datasets 
+FILTER<-sample_names(PHYLOSEQ.prop.BP)%in%sample_names(PHYLOSEQ_merged.gm)
+PHYLOSEQ.prop.BP<-prune_samples(FILTER,PHYLOSEQ.prop.BP)
+
+
+PHYLOSEQ.prop.BP.sub<-PHYLOSEQ.prop.BP
+PHYLOSEQ_merged.gm.sub<-PHYLOSEQ_merged.gm
+
+
+#Transform to proportions
+PHYLOSEQ.prop.BP.sub.trans<-transform_sample_counts(PHYLOSEQ.prop.BP.sub, function(x) x/sum(x))
+PHYLOSEQ_merged.gm.sub.trans<-transform_sample_counts(PHYLOSEQ_merged.gm.sub, function(x) x/sum(x))
+
+```
+
+# Sbusets of laboratory and wild mice 
+
+```{r}
+
+PHYLOSEQ.prop.BP.sub.trans.L<-prune_samples(sample_data(PHYLOSEQ.prop.BP.sub.trans)$wild_lab=="LAB",
+                                            PHYLOSEQ.prop.BP.sub.trans)
+PHYLOSEQ.prop.BP.sub.trans.W<-prune_samples(sample_data(PHYLOSEQ.prop.BP.sub.trans)$wild_lab!="LAB",
+                                            PHYLOSEQ.prop.BP.sub.trans)
+
+PHYLOSEQ_merged.gm.sub.trans.L<-prune_samples(sample_data(PHYLOSEQ_merged.gm.sub.trans)$wild_lab=="LAB",
+                                            PHYLOSEQ_merged.gm.sub.trans)
+PHYLOSEQ_merged.gm.sub.trans.W<-prune_samples(sample_data(PHYLOSEQ_merged.gm.sub.trans)$wild_lab!="LAB",
+                                            PHYLOSEQ_merged.gm.sub.trans)
+
+```
+
+
+#SPLS for wild
+
+SPLS analyse for wild mice. Locality and mouse ID considered as random effects.
+
+```{r}
+#Abundance matrix and sample data from phyloseq
+SD.GM<-sample_data(PHYLOSEQ.prop.BP.sub.trans.W)
+SD.BP<-sample_data(PHYLOSEQ.prop.BP.sub.trans.W)
+
+SD.GM<-data.frame(SD.GM)
+SD.BP<-data.frame(SD.BP)
+
+OTU.GM<-otu_table(PHYLOSEQ_merged.gm.sub.trans.W)
+OTU.BP<-t(otu_table(PHYLOSEQ.prop.BP.sub.trans.W))
+
+class(OTU.BP)<-"matrix"
+class(OTU.GM)<-"matrix"
+
+#Order samples
+OTU.GM<-OTU.GM[ order(rownames(OTU.GM)) , ]
+OTU.BP<-OTU.BP[ order(rownames(OTU.BP)) , ]
+SD.GM<-SD.GM[ order(rownames(SD.GM)), ]
+SD.BP<-SD.BP[ order(rownames(SD.BP)), ]
+
+
+OTU.GM.sub<-OTU.GM
+SD.GM.sub<-SD.GM
+
+OTU.BP.sub<-OTU.BP
+SD.BP.sub<-SD.BP
+
+#Remove rare variants (> 0.1%)
+FILTER<-colSums(OTU.BP.sub)/sum(OTU.BP.sub)>0.005
+OTU.BP.sub<-OTU.BP.sub[,FILTER]
+dim(OTU.BP.sub)
+
+FILTER<-colSums(OTU.GM.sub)/sum(OTU.GM.sub)>0.005
+OTU.GM.sub<-OTU.GM.sub[,FILTER]
+dim(OTU.GM.sub)
+
+#Relative proportions to pseudocounts
+X=OTU.BP.sub
+Y=OTU.GM.sub
+Y<-round(Y*1000,0)+1
+X<-round(X*1000,0)+1
+summary(Y)
+
+#spls
+design <- data.frame(strain=SD.GM.sub$strain_locality,sample = SD.GM.sub$mouse_ID)
+MyResult.spls <-spls(X=X,Y=Y,
+                     ncomp = 10,
+                     #keepX = c(50, 50), keepY = c(50,50),
+                     logratio="CLR",
+                     scale = T,
+                     mode = "regression",
+                     multilevel = design,
+                     near.zero.var=F
+                     )
+
+
+
+# Spls optimization
+ncomp=2
+tune.res = tune.spls( X=X, Y=Y, ncomp = ncomp,
+                      test.keepX = rep(dim(X)[2],ncomp),
+                      test.keepY = rep(dim(Y)[2],ncomp),
+                      measure = "RSS",folds = 4,
+                      mode = "regression",
+                      validation = "loo",
+                      multilevel = design, nrepeat = 10, progressBar = TRUE)
+tune.res$choice.ncomp
+tune.res$choice.keepX
+tune.res$choice.keepY
+
+#Final model
+MyResult.spls <-spls(X=X,Y=Y,
+                     ncomp = tune.res$choice.ncomp+1,
+                     keepX = tune.res$choice.keepX[1:tune.res$choice.ncomp+1],
+                     keepY = tune.res$choice.keepY[1:tune.res$choice.ncomp+1],
+                     logratio="CLR",
+                     scale = T,
+                     mode = "regression",
+                     multilevel = design,
+                     near.zero.var=T
+                     )
+MyResult.spls.W<-MyResult.spls
+
+#Suoperimposition plot
+arr<-plotArrow(MyResult.spls,X.label = 'PLS comp 1', Y.label = 'PLS comp 2',
+          group = SD.GM.sub$strain_locality,
+          ind.names.size = 1.5,
+               pch.size = 1.5,
+               arrow.alpha = 0.3,
+               arrow.size = 0.3
+        )
+arr<-arr+theme(legend.title = element_blank(),
+               legend.text = element_text(size=7))
+arr
+ggsave(arr,filename = "/media/kreising/DATA/data/BF_mysi/RESULTS_15.3.2022/SPLS_arrows_WILD.pdf",
+       width = 12,height = 12, units = "cm")
+arr.W<-arr
+
+```
+
+# SPLS for laboratory mice 
+
+The same steps as above for laboratory mice. Strain identity and mouse ID considered as random effects.
+
+
+```{r}
+
+SD.GM<-sample_data(PHYLOSEQ.prop.BP.sub.trans.L)
+SD.BP<-sample_data(PHYLOSEQ.prop.BP.sub.trans.L)
+
+SD.GM<-data.frame(SD.GM)
+SD.BP<-data.frame(SD.BP)
+
+OTU.GM<-otu_table(PHYLOSEQ_merged.gm.sub.trans.L)
+OTU.BP<-t(otu_table(PHYLOSEQ.prop.BP.sub.trans.L))
+
+class(OTU.BP)<-"matrix"
+class(OTU.GM)<-"matrix"
+
+
+OTU.GM<-OTU.GM[ order(rownames(OTU.GM)) , ]
+OTU.BP<-OTU.BP[ order(rownames(OTU.BP)) , ]
+SD.GM<-SD.GM[ order(rownames(SD.GM)), ]
+SD.BP<-SD.BP[ order(rownames(SD.BP)), ]
+
+
+OTU.GM.sub<-OTU.GM
+SD.GM.sub<-SD.GM
+
+OTU.BP.sub<-OTU.BP
+SD.BP.sub<-SD.BP
+
+
+FILTER<-colSums(OTU.BP.sub)/sum(OTU.BP.sub)>0.005
+OTU.BP.sub<-OTU.BP.sub[,FILTER]
+dim(OTU.BP.sub)
+
+FILTER<-colSums(OTU.GM.sub)/sum(OTU.GM.sub)>0.005
+OTU.GM.sub<-OTU.GM.sub[,FILTER]
+dim(OTU.GM.sub)
+
+
+X=OTU.BP.sub
+Y=OTU.GM.sub
+Y<-round(Y*1000,0)+1
+X<-round(X*1000,0)+1
+summary(Y)
+
+#spls
+design <- data.frame(strain=SD.GM.sub$strain_locality,sample = SD.GM.sub$mouse_ID)
+MyResult.spls <-spls(X=X,Y=Y,
+                     ncomp = 10,
+                     #keepX = c(50, 50), keepY = c(50,50),
+                     logratio="CLR",
+                     scale = T,
+                     mode = "regression",
+                     multilevel = design,
+                     near.zero.var=F
+                     )
+MyResult.spls.L<-MyResult.spls
+
+
+
+ncomp=5
+tune.res = tune.spls( X=X, Y=Y, ncomp = ncomp,
+                      test.keepX = rep(dim(X)[2],ncomp),
+                      test.keepY = rep(dim(Y)[2],ncomp),
+                      measure = "RSS",folds = 4,
+                      mode = "regression",
+                      validation = "loo",
+                      multilevel = design, nrepeat = 10, progressBar = TRUE)
+tune.res$choice.ncomp
+tune.res$choice.keepX
+tune.res$choice.keepY
+
+ncomp=2
+tune.res = tune.spls( X=X, Y=Y, ncomp = ncomp,
+                      test.keepX = rep(dim(X)[2],ncomp),
+                      test.keepY = rep(dim(Y)[2],ncomp),
+                      measure = "RSS",folds = 4,
+                      mode = "regression",
+                      validation = "loo",
+                      multilevel = design, nrepeat = 10, progressBar = TRUE)
+tune.res$choice.ncomp
+tune.res$choice.keepX
+tune.res$choice.keepY
+
+l
+MyResult.spls <-spls(X=X,Y=Y,
+                     ncomp = tune.res$choice.ncomp+1,
+                     keepX = tune.res$choice.keepX[1:tune.res$choice.ncomp+1],
+                     keepY = tune.res$choice.keepY[1:tune.res$choice.ncomp+1],
+                     logratio="CLR",
+                     scale = T,
+                     mode = "regression",
+                     multilevel = design,
+                     near.zero.var=T
+                     )
+MyResult.spls.L<-MyResult.spls
+
+arr<-plotArrow(MyResult.spls,X.label = 'PLS comp 1', Y.label = 'PLS comp 2',
+          group = SD.GM.sub$strain_locality,
+          ind.names.size = 1.5,
+               pch.size = 1.5,
+               arrow.alpha = 0.3,
+               arrow.size = 0.3
+        )
+arr<-arr+theme(legend.title = element_blank(),
+               legend.text = element_text(size=7))
+arr
+# ggsave(arr,filename = "/media/kreising/DATA/data/BF_mysi/RESULTS_15.3.2022/SPLS_arrows_LAB.pdf",
+#        width = 12,height = 12, units = "cm")
+arr.L<-arr
+
+
+```
+
+# Plot SPLS results for laboratory and wild mice 
+
+```{r}
+library(ggpubr)
+GRID<-ggarrange(arr.L+ggtitle("A) Laboratory strains"),
+          arr.W+ggtitle("B) Wild individuals"),
+          nrow = 2)
+
+ggsave(GRID,filename = "/media/kreising/DATA/data/BF_mysi/RESULTS_10.70.2023/SPLS_arrows_LAB_WILD.pdf",
+       width = 8,height = 15, units = "cm")
+GRID
+```
+
+
+# Correlation between individual bacteria and pahges
+
+Due to the high heterogeneity between the wild and laboratory populations and the small sample size of the wild individuals, these analyses were only performed for laroratory mice. Only bacteria and phages with a loading > 0.2 (according to SPLS) were considered. Mixed models with negative binomial distribution were fitted for all their combinations, with bacterial abundance as the response and phage abundance (log-scaled) as the explantoratory variable. Individual identity was considered as a random effect.
+
+```{r warning=F,message=F}
+
+TRESHOLD=0.2
+
+Loadings.X<-MyResult.spls.L$loadings$X
+Loadings.Y<-MyResult.spls.L$loadings$Y
+
+Loadings.X.high1<-rownames(Loadings.X)[abs(Loadings.X[,1])>TRESHOLD]
+Loadings.Y.high1<-rownames(Loadings.Y)[abs(Loadings.Y[,1])>TRESHOLD]
+
+Loadings.X.high2<-rownames(Loadings.X)[abs(Loadings.X[,2])>TRESHOLD]
+Loadings.Y.high2<-rownames(Loadings.Y)[abs(Loadings.Y[,2])>TRESHOLD]
+
+Loadings.X.high<-unique(c(Loadings.X.high1,Loadings.X.high2))
+Loadings.Y.high<-unique(c(Loadings.Y.high1,Loadings.Y.high2))
+length(Loadings.X.high)
+length(Loadings.Y.high)
+
+COMB<-expand.grid(Loadings.X.high,Loadings.Y.high) #OTU x BP combinations to be tested...
+
+PHYLOSEQ.prop.BP
+PHYLOSEQ.prop.BP.trans<-transform_sample_counts(PHYLOSEQ.prop.BP,function(x) x/sum(x))
+PHYLOSEQ_merged.gm
+
+#Laboratory mice only
+PHYLOSEQ.prop.BP.trans.W<-prune_samples(sample_data(PHYLOSEQ.prop.BP.trans)$wild_lab!="WILD",
+                                        PHYLOSEQ.prop.BP.trans)
+PHYLOSEQ_merged.gm.W<-prune_samples(sample_data(PHYLOSEQ_merged.gm)$wild_lab!="WILD",
+                                        PHYLOSEQ_merged.gm)
+
+
+OTU_GM.raw<-otu_table(PHYLOSEQ_merged.gm.W)
+OTU_BP.raw<-t(otu_table(PHYLOSEQ.prop.BP.trans.W))
+class(OTU_GM.raw)<-"matrix"
+class(OTU_BP.raw)<-"matrix"
+SD.raw<-data.frame(sample_data(PHYLOSEQ_merged.gm.W))
+
+OTU_GM.raw<-OTU_GM.raw[ order(rownames(OTU_GM.raw)) , ]
+OTU_BP.raw<-OTU_BP.raw[ order(rownames(OTU_BP.raw)) , ]
+SD.raw<-SD.raw[ order(rownames(SD.raw)) , ]
+SSUMS<-rowSums(OTU_GM.raw)
+ID<-SD.raw$mouse_ID
+LOC<-SD.raw$strain_locality
+
+################
+#Fitting models#
+################
+
+SUMMARY.nb.list<-list()
+
+for(i in 1:dim(COMB)[1]){
+   print(i)
+   X.ACT<-OTU_BP.raw[,colnames(OTU_BP.raw)==COMB[i,1]]
+   Y.ACT<-OTU_GM.raw[,colnames(OTU_GM.raw)==COMB[i,2]]
+
+   DF<-data.frame(Y.ACT,X.ACT,ID,LOC,SSUMS)
+   DF$X.ACT.sqrt<-DF$X.ACT^2
+   DF$X.ACT.log<-log(DF$X.ACT+0.0001)
+   
+   try(SUMMARY.nb.list[[i]]<-(glmmTMB(Y.ACT~LOC+X.ACT.log+(1|ID),family = nbinom1,
+                                       
+                                       data=DF,offset = log(SSUMS))))
+   
+ }
+
+RESULTS_NORMAL<-SUMMARY.nb.list
+
+##############
+##POSTPROCESS#
+##############
+NAMES<-paste(COMB[,1],COMB[,2],sep="_")
+# names(GG.list)<-NAMES
+
+
+SUMMARY_nb.normal<-do.call("rbind",EXTRACT_SUMMARY(x=RESULTS_NORMAL))
+SUMMARY_nb.normal<-SUMMARY_nb.normal[grep("X.ACT.log",rownames(SUMMARY_nb.normal)),]
+
+
+RESULTS<-data.frame(COMB,SUMMARY_nb.normal)
+RESULTS$FDR<-p.adjust(RESULTS$Pr...z..,"fdr")
+sum(RESULTS$FDR<0.05,na.rm = T)
+
+###############################
+#GRAPHICAL#####################
+###############################
+
+PHYLOSEQ_merged.gm.sub.trans<-manage_unassigned(PHYLOSEQ=PHYLOSEQ_merged.gm.sub.trans,
+                                                UNASS_STRING=NA,ADD="",AFTER=TRUE)
+
+RESULTS.SIG<-RESULTS[RESULTS$FDR<0.05,]
+RESULTS.SIG<-RESULTS.SIG[!is.na(RESULTS.SIG$Var1),]
+GG_list<-list()
+i<-1
+for(i in 1:dim(RESULTS.SIG)[1]){
+     X.ACT<-OTU_BP.raw[,colnames(OTU_BP.raw)==RESULTS.SIG$Var1[i]]
+     Y.ACT<-OTU_GM.raw[,colnames(OTU_GM.raw)==RESULTS.SIG$Var2[i]]
+     LOC<-SD.raw$strain_locality
+     DF<-data.frame(X.ACT,Y.ACT,LOC,SUMS=rowSums(OTU_GM.raw))
+     GG<-ggplot(DF,aes(x=X.ACT^0.5,y=(Y.ACT/SUMS)^0.5))+geom_point(aes(color=LOC),alpha=0.5)
+     BF.act<-tax_table(prune_taxa(taxa_names(PHYLOSEQ.prop.BP.sub.trans)%in%RESULTS.SIG$Var1[i],
+                                     PHYLOSEQ.prop.BP.sub.trans))
+     GB.act<-tax_table(prune_taxa(taxa_names(PHYLOSEQ_merged.gm.sub.trans)%in%RESULTS.SIG$Var2[i],
+                                     PHYLOSEQ_merged.gm.sub.trans))
+     XLAB<-paste0(RESULTS.SIG$Var1[i]," (",BF.act[,"Family"],")")
+     YLAB<-paste0(gsub("OTU","ASV",RESULTS.SIG$Var2[i])," (",GB.act[,"Genus"],")")
+     if(RESULTS.SIG$FDR[i]>0.001){REG_PARAM<-paste("Estimate =",round(RESULTS.SIG$Estimate[i],3),"±",
+                                     round(RESULTS.SIG$Std..Error[i],3),
+                                     "\nfdr =",round(RESULTS.SIG$FDR[i],3))}
+     if(RESULTS.SIG$FDR[i]<0.001){REG_PARAM<-paste("Estimate =",round(RESULTS.SIG$Estimate[i],3),"±",
+                                     round(RESULTS.SIG$Std..Error[i],3),
+                                     "\nfdr < 0.001")}
+     GG<-GG+ylab(YLAB)+xlab(XLAB)+annotate(geom="text",x=Inf,y=Inf,
+                                           hjust=1,vjust=1,label=REG_PARAM,size=2.5)
+     GG_list[[i]]<-GG
+}
+
+
+```
+
+# Final plots
+
+```{r fig.width=12,fig.height=20, warning=F,message=F}
+small_fnc<-function(x){
+  x+theme_bw()+
+    theme(axis.title = element_text(size=8),
+          axis.text = element_text(size=7),
+          legend.text = element_text(size=7),
+          legend.title = element_blank())
+}
+
+GG_list.small<-list()
+for(i in 1:length(GG_list)){
+  GG_list.small[[i]]<-small_fnc(GG_list[[i]])
+}
+
+
+library(ggpubr)
+GRID<-ggarrange(plotlist = GG_list.small, common.legend = T,legend = "bottom",
+          ncol = 3,nrow = 3)
+
+ggsave(GRID,filename = "/media/kreising/DATA/data/BF_mysi/RESULTS_10.70.2023/GM_BP_correlations.pdf",
+       width = 15,height = 15,units = "cm")
+GRID
+
+
+```
+

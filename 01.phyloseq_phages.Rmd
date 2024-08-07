@@ -1,0 +1,158 @@
+---
+title: "Phage data to phyloseq"
+author: "Jakub Kreisinger"
+date: "July 22, 2021"
+output: html_document
+---
+
+```{r warning=F,message=F}
+knitr::opts_chunk$set(echo = TRUE)
+library(phyloseq)
+library(ggplot2)
+library(ggh4x)
+library(vegan)
+library(lme4)
+library(lmerTest)
+library(multcomp)
+library(ggpubr)
+library(ape)
+library(plyr)
+library(reshape2)
+
+c25 <- c("dodgerblue2","#E31A1C", # red
+         "green4",
+         "#6A3D9A", # purple
+         "#FF7F00", # orange
+         "black","gold1",
+         "skyblue2","#FB9A99", # lt pink
+         "palegreen2",
+         "#CAB2D6", # lt purple
+         "#FDBF6F", # lt orange
+          "khaki2",
+         "maroon","orchid1","deeppink1","blue1","steelblue4",
+         "darkturquoise","green1","yellow4","yellow3",
+         "darkorange4","brown","gray70")
+
+phyloseq_2_GG<-function(which.taxa,which.phyloseq,manage.ussigned=NULL,unassign.string=NULL){  
+  RESULT<-data.frame(stringsAsFactors = F)
+  subset_phylos<-prune_taxa(taxa_names(which.phyloseq)%in%which.taxa,which.phyloseq)
+  SSUMS<-sample_sums(which.phyloseq)
+  for(i in 1: length(which.taxa))
+    {
+      actual.phylos<-prune_taxa(taxa_names(which.phyloseq)%in%which.taxa[i],which.phyloseq)
+      Abundance<-as.numeric(otu_table(actual.phylos))  
+      OTU<-rep(which.taxa[i],length(Abundance))
+      Seq.tot<-rep(SSUMS[i],length(Abundance))
+      Seq.tot<-SSUMS
+      Taxo.actual<-as.character(tax_table(actual.phylos))
+      if(manage.ussigned==T){
+        for(j in 2: length(Taxo.actual)){
+          if(is.na(Taxo.actual[j])){Taxo.actual[j]<-ifelse(regexpr(unassign.string,Taxo.actual[j-1])>0,
+                                           Taxo.actual[j-1],paste(Taxo.actual[j-1],unassign.string,sep=""))}
+        }
+      }
+      
+      Taxo.actual.rbind<-do.call("rbind", replicate(length(sample_sums(actual.phylos)), Taxo.actual, simplify = FALSE))
+      colnames(Taxo.actual.rbind)<-colnames(tax_table(which.phyloseq))
+      Sd<-sample_data(actual.phylos)
+      TEMP<-data.frame(Abundance,OTU,Seq.tot,Taxo.actual.rbind,Sd,stringsAsFactors = F)
+      RESULT<-rbind(RESULT,TEMP)
+    }
+    RESULT
+}
+
+small_fig<-function(gg){
+  gg+theme(axis.text = element_text(size=8),
+           axis.title = element_text(size=8),
+           strip.text = element_text(size=8),
+           plot.title = element_text(size=8),
+           legend.text = element_text(size=8),
+           legend.title = element_blank())
+   }
+```
+
+# Mapping files to Abundance matrix
+
+This chunck iterates through the mapping files for individual samples (showing for each sample the number of reads mapped to each phage contig). An abundance matrix (OTU_TABLE.phages2) is created in which the cells correspond to the number of reads for each sample that were mapped to individual contigs.    
+
+```{r}
+PATH="/media/kreising/DATA/data/BF_mysi/phages_proKubu/phage_coverages/"
+LIST<-list.files("/media/kreising/DATA/data/BF_mysi/phages_proKubu/phage_coverages/")
+
+meanmapq_TRESHOLD<-10
+for(i in 1: length(LIST)){
+  # print(i)
+  SAMPLE_NAME<-LIST[i]
+  ACT<-read.delim(paste(PATH,LIST[i],sep=""))
+  ACT<-ACT[ACT$meanmapq>meanmapq_TRESHOLD,]
+  ACT.mod<-data.frame(Contig=ACT$X.rname,SAMPLE=ACT$meandepth)
+  names(ACT.mod)[2]<-SAMPLE_NAME
+
+  if(i==1){OTU_TABLE<-ACT.mod}
+  if(i>1){OTU_TABLE<-join(OTU_TABLE,ACT.mod,by="Contig",type="full")}
+  # print(dim(OTU_TABLE)[1])
+}
+
+# dim(OTU_TABLE)
+rownames(OTU_TABLE)<-OTU_TABLE[,1]
+OTU_TABLE<-OTU_TABLE[,2:dim(OTU_TABLE)[2]]
+OTU_TABLE[is.na(OTU_TABLE)]<-0
+OTU_TABLE.phages2<-OTU_TABLE 
+```
+
+
+# Normalizace
+1] proporce - pro bray meandepth/sum(meandepth)
+2] "rare" - treshold odpovida minimalnimu podilu pro vzorek s minimalnim souctem podilu. Vse nad to je 1 a pod to je 0.
+```{r}
+# #normalizace na proporce
+# # hist(colSums(OTU_TABLE.phages2))
+# summary(colSums(OTU_TABLE.phages2))
+# COLSUMS<-colSums(OTU_TABLE.phages2)
+# OTU_TABLE.phages.prop<-t(apply(OTU_TABLE.phages2,1,function(x) x/COLSUMS))
+# 
+# #
+# MIN<-OTU_TABLE.phages.prop[,COLSUMS==min(COLSUMS)]
+# MIN[MIN==0]<-1
+# TRESHOLD<-min(MIN)
+# 
+# OTU_TABLE.phages.01<-OTU_TABLE.phages.prop
+# OTU_TABLE.phages.01[OTU_TABLE.phages.01<TRESHOLD]<-0
+# OTU_TABLE.phages.01[OTU_TABLE.phages.01>0]<-1
+
+```
+
+# Phyloseq database
+
+Sample metadata and the abundance matrix are merged in a database using the R package phyloseq. The abundance matrix is also normalized so that 1) the numbers indicate the relative abundances of phage contigs in each sample and 2] their absence/presence.
+
+```{r}
+OTU_TABLE.phages.prop<-otu_table(OTU_TABLE.phages.prop,taxa_are_rows = T) #proporce
+OTU_TABLE.phages.01<-otu_table(OTU_TABLE.phages.01,taxa_are_rows = T) #presence absence
+OTU_TABLE.phages2<-otu_table(OTU_TABLE.phages2,taxa_are_rows = T) #hrube hodnoty
+
+sample_names(OTU_TABLE.phages.prop)<-gsub("_phage-rijen21_coverages","",sample_names(OTU_TABLE.phages.prop))
+sample_names(OTU_TABLE.phages.01)<-gsub("_phage-rijen21_coverages","",sample_names(OTU_TABLE.phages.01))
+sample_names(OTU_TABLE.phages2)<-gsub("_phage-rijen21_coverages","",sample_names(OTU_TABLE.phages2))
+
+SD<-read.delim("/media/kreising/DATA/data/BF_mysi/data/fagy_experiment_table.txt")
+SD<-SD[match(sample_names(OTU_TABLE.phages.01), SD$seq_sample_ID),]
+SD<-sample_data(SD)
+
+sample_names(OTU_TABLE.phages.prop)<-SD$seq_sample_ID
+sample_names(OTU_TABLE.phages.01)<-SD$seq_sample_ID
+sample_names(OTU_TABLE.phages2)<-SD$seq_sample_ID
+sample_names(SD)<-SD$seq_sample_ID
+
+PHYLOSEQ.prop<-merge_phyloseq(OTU_TABLE.phages.prop,SD)
+PHYLOSEQ.01<-merge_phyloseq(OTU_TABLE.phages.01,SD)
+PHYLOSEQ.allF<-merge_phyloseq(OTU_TABLE.phages2,SD)
+
+PHYLOSEQ.prop.BP<-PHYLOSEQ.prop
+PHYLOSEQ.01.BP<-PHYLOSEQ.01
+PHYLOSEQ.allF.BP<-PHYLOSEQ.allF
+
+save(PHYLOSEQ.prop.BP,file = "/media/kreising/DATA/data/BF_mysi/data/PHYLOSEQ.prop.BP_100322.R")
+save(PHYLOSEQ.01.BP,file = "/media/kreising/DATA/data/BF_mysi/data/PHYLOSEQ.01.BP_100322.R")
+save(PHYLOSEQ.allF.BP,file = "/media/kreising/DATA/data/BF_mysi/data/PHYLOSEQ.allF.BP_100322.R")
+```

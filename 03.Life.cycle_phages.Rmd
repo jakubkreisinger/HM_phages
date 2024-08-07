@@ -1,0 +1,293 @@
+---
+title: "Life cycle predictions"
+author: "Jakub Kreisinger"
+date: "July 22, 2021"
+output: html_document
+---
+
+# Packages and functions
+
+```{r warning=F,message=F}
+knitr::opts_chunk$set(echo = TRUE)
+library(phyloseq)
+library(ggplot2)
+library(ggh4x)
+library(vegan)
+library(lme4)
+library(lmerTest)
+library(multcomp)
+library(ggpubr)
+library(ape)
+library(plyr)
+library(reshape2)
+
+
+```
+
+
+# Load existing phyloseq objects
+
+```{r fig.height=20,fig.width=15, warning=F, message=F}
+load("/media/kreising/DATA/data/BF_mysi/data/PHYLOSEQ.prop.BP_100322.R")
+load("/media/kreising/DATA/data/BF_mysi/data/PHYLOSEQ.01.BP_100322.R")
+load("/media/kreising/DATA/data/BF_mysi/data/PHYLOSEQ.allF.BP_100322.R")
+
+PHYLOSEQ.prop<-PHYLOSEQ.prop.BP
+PHYLOSEQ.01<-PHYLOSEQ.01.BP
+PHYLOSEQ.allF<-PHYLOSEQ.allF.BP
+```
+
+# Read Phatype predictions
+
+```{r fig.height=20,fig.width=15, warning=F, message=F}
+
+####Phatype#####
+Phatype<-read.delim("/media/kreising/DATA/data/BF_mysi/phages_pro_Kub_temperatni_2024-07-22/nasefagy_checkV_deephage_phatyp/PhaType_phage_scaffolds_crossassemb_rijen21/out/phatyp_prediction.csv",sep=",")
+names(Phatype)[2:4]<-paste0(names(Phatype)[2:4],"_phatype")
+
+
+#Add contig length
+DELKY<-read.delim("/media/kreising/DATA/data/BF_mysi/DATA_29.11.2021/phage_coverages/BLS10_2_phage-rijen21_coverages")
+names(DELKY)[1]<-"Accession"
+DELKY<-join(DELKY,Phatype)
+
+
+NODE<-gsub("_length_","~",DELKY$Accession)
+NODE<-sapply(strsplit(NODE, "~"), function(x) x[1], simplify=T)
+NODE<-gsub("_",".",NODE)
+DELKY$NODE<-NODE
+
+
+DELKY.s<-DELKY[DELKY$Pred_phatype!="unpredicted",]
+
+```
+
+# Predicted life cycle vs contig length
+
+```{r fig.height=20,fig.width=15, warning=F, message=F}
+
+ggplot(DELKY.s,aes(y=endpos,x=Pred_phatype))+geom_jitter(alpha=0.1,height = 0.01)+
+                                             geom_boxplot()+
+                                            scale_y_continuous(trans='log10')
+wilcox.test(DELKY.s$endpos~as.factor(DELKY.s$Pred_phatype))
+tapply(DELKY.s$endpos,as.factor(DELKY.s$Pred_phatype),median)
+
+
+```
+
+
+# Potentially transmitted phages vs. predicted life cycle
+
+```{r fig.height=20,fig.width=15, warning=F, message=F}
+
+TRANS<-read.delim("/media/kreising/DATA/data/BF_mysi/RESULTS_15.3.2022/Transmitted_BF.txt")
+TRANS_in_donor<-TRANS[TRANS$RESULTS==T,]
+
+DELKY$TRASMITED<-ifelse(DELKY$NODE%in%TRANS_in_donor$OTU==T,1,0)
+sum(DELKY$TRASMITED)
+length(unique(TRANS$OTU))
+296/622
+
+#phatype
+Trans_summary.phatype<-tapply(rep(1,length(DELKY$TRASMITED)), list(DELKY$Pred_phatype,DELKY$TRASMITED), sum)
+Trans_summary.phatype
+Trans_summary.phatype.2<-Trans_summary.phatype[-2,]
+chisq.test(Trans_summary.phatype.2)
+
+
+apply(Trans_summary.phatype.2,2,function(x) x/sum(x))
+apply(Trans_summary.phatype,2,function(x) x/sum(x))
+```
+
+# Summary of life cycle for our data
+
+```{r fig.height=20,fig.width=15, warning=F, message=F}
+######################################
+#Life-cycle  vs. population###########
+######################################
+
+dim(otu_table(PHYLOSEQ.prop.sub))
+dim(DELKY2)
+
+DELKY3<-DELKY2[match(taxa_names(PHYLOSEQ.prop.sub), DELKY2$NODE),]
+
+# Number of contigs
+num.phatype<-summary(as.factor(DELKY3$Pred_phatype))/dim(DELKY3)[1]
+
+# Propotion of community (all samples)
+prop.phatype.all<-tapply(taxa_sums(PHYLOSEQ.prop.sub)/nsamples(PHYLOSEQ.prop.sub),DELKY3$Pred_phatype,sum)
+
+# Propotion of community (BULS)
+prop.phatype.bls<-tapply(DELKY3$BULS,DELKY3$Pred_phatype,sum)
+
+# Propotion of community (BUSNA)
+prop.phatype.bsn<-tapply(DELKY3$BUSNA,DELKY3$Pred_phatype,sum)
+
+# Propotion of community (wild)
+prop.phatype.w<-tapply(DELKY3$WILD,DELKY3$Pred_phatype,sum)
+
+
+```
+
+
+# Proportion of virulent in wild and laboratory mice
+
+```{r fig.height=20,fig.width=15, warning=F, message=F}
+
+FF<-sample_data(PHYLOSEQ.prop.sub)$day_of_experiment%in%c("D-1","D0")
+PHYLOSEQ.prop.sub1<-prune_samples(FF,PHYLOSEQ.prop.sub)
+SD<-sample_data(PHYLOSEQ.prop.sub1)
+Prop_phatype<-
+t(apply(otu_table(PHYLOSEQ.prop.sub1), 2, function(x) tapply(x,DELKY3$Pred_phatype,sum)))
+
+SD<-data.frame(sample_data(PHYLOSEQ.prop.sub1))
+SD$KAT<-ifelse(!SD$strain_locality%in%c("BULS","BUSNA"),"WILD",KAT)
+
+Prop_phatype<-
+data.frame(Prop_phatype,SD)
+
+ggplot(Prop_phatype,aes(x=KAT,y=virulent))+geom_boxplot(outlier.shape = NA)+geom_jitter()
+
+m.phatype<-lm(virulent~KAT,Prop_phatype)
+anova(m.phatype)
+
+m.phatype<-lm(temperate~KAT,Prop_phatype)
+anova(m.phatype)
+
+range(Prop_phatype$temperate)
+
+```
+
+
+# Proportion of virulent after transplantation
+
+```{r fig.height=20,fig.width=15, warning=F, message=F}
+
+FF<-sample_data(PHYLOSEQ.prop.sub)$wild_lab=="LAB"
+PHYLOSEQ.prop.sub1<-prune_samples(FF,PHYLOSEQ.prop.sub)
+SD<-sample_data(PHYLOSEQ.prop.sub1)
+Prop_phatype<-
+t(apply(otu_table(PHYLOSEQ.prop.sub1), 2, function(x) tapply(x,DELKY3$Pred_phatype,sum)))
+
+SD<-data.frame(sample_data(PHYLOSEQ.prop.sub1))
+SD$KAT<-ifelse(!SD$strain_locality%in%c("BULS","BUSNA"),"WILD",KAT)
+
+Prop_phatype<-
+data.frame(Prop_phatype,SD)
+
+ggplot(Prop_phatype,aes(x=day_of_experiment,y=virulent))+geom_boxplot(outlier.shape = NA)+geom_jitter()
+
+tapply(Prop_phatype$virulent,list(Prop_phatype$day_of_experiment,
+                                  Prop_phatype$experimental_group,
+                                  Prop_phatype$strain_locality),mean)  
+  
+M<-lmer(temperate~day_of_experiment+experimental_group+strain_locality+
+          day_of_experiment:experimental_group+
+          day_of_experiment:strain_locality+
+          experimental_group:strain_locality+
+          day_of_experiment:experimental_group:strain_locality+
+          (1|mouse_ID),Prop_phatype)
+
+M2<-lmer(temperate~day_of_experiment+experimental_group+strain_locality+
+          day_of_experiment:experimental_group+
+          day_of_experiment:strain_locality+
+          experimental_group:strain_locality+
+          (1|mouse_ID),Prop_phatype)
+
+M3<-lmer(temperate~day_of_experiment+experimental_group+strain_locality+
+          day_of_experiment:strain_locality+
+          experimental_group:strain_locality+
+          (1|mouse_ID),Prop_phatype)
+
+
+anova(M,M2)
+anova(M2,M3)
+
+summary(M)
+
+
+unique(Prop_phatype$day_of_experiment)
+unique(Prop_phatype$experimental_group)
+unique(Prop_phatype$day_of_experiment)
+```
+
+
+# Life cycle predictions for Kim and Bae 
+
+```{r fig.height=20,fig.width=15, warning=F, message=F}
+
+load( "/media/kreising/DATA/data/BF_mysi/data/PHYLOSEQ.prop.BP.KimBae.R")
+
+DELKY.kb<-read.delim("/media/kreising/DATA/data/BF_mysi/phages_pro_Kub_temperatni_2024-07-22/KimAndBae_checkV_deephage_phatyp/Phatype_KimandBae_phage_scaffolds_filtered/out/phatyp_prediction.csv",sep=",")
+names(DELKY.kb)[2:4]<-paste0(names(DELKY.kb)[2:4],"_phatype")
+
+
+##proporce readu######################
+NODE<-gsub("_length_","~",DELKY.kb$Accession)
+NODE<-sapply(strsplit(NODE, "~"), function(x) x[1], simplify=T)
+NODE<-gsub("_",".",NODE)
+DELKY.kb$NODE<-NODE
+
+DDF<-data.frame(NODE=taxa_names(PHYLOSEQ.prop.BP.KimBae),
+                PROP=taxa_sums(PHYLOSEQ.prop.BP.KimBae)/nsamples(PHYLOSEQ.prop.BP.KimBae))
+
+DELKY.kb<-join(DELKY.kb,DDF)
+
+#Number of contigs
+num.phatype.kb<-summary(as.factor(DELKY.kb$Pred_phatype))
+
+#Proportion of community
+prop.phatype.kb<-tapply(DELKY.kb$PROP,DELKY.kb$Pred_phatype,function(x) sum(x, na.rm = T))
+
+prop.phatype.kb<-tapply(DELKY.kb$PROP,DELKY.kb$Pred_phatype,function(x) sum(x, na.rm = T))
+
+num.phatype.kb<-summary(as.factor(DELKY.kb$Pred_phatype))/dim(DELKY.kb)[1]
+
+
+# Without microviridae
+FILT<-as.character(tax_table(PHYLOSEQ.prop.BP.KimBae)[,2])!="Microviridae"
+
+DELKY.kb.f<-DELKY.kb[DELKY.kb$NODE%in%taxa_names(PHYLOSEQ.prop.BP.KimBae)[FILT],]
+
+prop.phatype.kb.filt<-tapply(DELKY.kb.f$PROP,DELKY.kb.f$Pred_phatype,function(x) sum(x, na.rm = T))
+prop.phatype.kb.filt<-prop.phatype.kb.filt/sum(prop.phatype.kb.filt)
+num.phatype.kb.filt<-summary(as.factor(DELKY.kb.f$Pred_phatype))/dim(DELKY.kb.f)[1]
+
+KK<-
+rbind(num.phatype.kb,
+      prop.phatype.kb,
+      num.phatype.kb.filt,
+      prop.phatype.kb.filt)
+
+KK
+
+```
+
+# Summary for our data and Kim & Bae
+
+```{r fig.height=20,fig.width=15, warning=F, message=F}
+
+SUMMARY<-
+rbind(num.phatype,
+      num.phatype.kb,
+      prop.phatype.all,
+      prop.phatype.kb,
+      prop.phatype.bls,
+      prop.phatype.bsn,
+      prop.phatype.w)
+
+colnames(SUMMARY)<-c("temperate","unassigned","virulent")
+
+
+Study<-c(rep("our",1),rep("KB",1),rep("our",1),rep("KB",1),rep("our",3))
+Subset<-c(rep("all data",4),rep("bls",1),rep("bsn",1),rep("wld",1))
+Metrics<-c(rep("Num contings",2),rep("prop. community",5)) 
+
+RESULTS<-
+data.frame(Study,Subset,Metrics,SUMMARY[,c(1,3,2)])
+
+write.table(RESULTS,"/media/kreising/DATA/data/BF_mysi/Chekv_etc/Temparate_comp.s.txt",
+            sep="\t",quote = F,row.names = F)
+
+RESULTS
+```
